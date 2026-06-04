@@ -1,0 +1,136 @@
+services:
+  caddy:
+    build: ./caddy
+    restart: always
+    environment:
+      # Caddy listens on $CADDY_PORT (default 80). Coolify routes the public
+      # domain to this service on its default target port (80), so production
+      # needs no port suffix here. Locally CADDY_PORT=3000 (see .env.example).
+      - SERVICE_URL_CADDY
+      - CADDY_LOG_OUTPUT=${CADDY_LOG_OUTPUT:-discard}
+      - CADDY_PORT=${CADDY_PORT:-80}
+    expose:
+      - "${CADDY_PORT:-80}"
+    depends_on:
+      ghost:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q -S -T 3 --spider http://127.0.0.1:$${CADDY_PORT}/ 2>&1 | grep -q 'HTTP/'"
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 120s
+  ghost:
+    image: ghost:6.32.0-alpine@sha256:63183a425e84b87097e44aa111c8b8db877440d2a2a4c59b0d8540e328dc367d
+    environment:
+      url: ${SERVICE_URL_CADDY}
+      NODE_ENV: production
+      admin__url: ${SERVICE_URL_CADDY}
+      database__client: mysql
+      database__connection__host: mysql
+      database__connection__user: ${SERVICE_USER_MYSQL}
+      database__connection__password: ${SERVICE_PASSWORD_MYSQL}
+      database__connection__database: ${GHOST_DATABASE:-ghost}
+      mail__transport: SMTP
+      mail__from: ${MAIL_FROM}
+      mail__options__auth__pass: ${MAIL_OPTIONS_AUTH_PASS}
+      mail__options__auth__user: ${MAIL_OPTIONS_AUTH_USER}
+      mail__options__secure: ${MAIL_OPTIONS_SECURE:-true}
+      mail__options__port: ${MAIL_OPTIONS_PORT:-465}
+      mail__options__service: ${MAIL_OPTIONS_SERVICE:-Mailgun}
+      mail__options__host: ${MAIL_OPTIONS_HOST}
+      analytics__enabled: "true"
+      tinybird__tracker__endpoint: ${SERVICE_URL_CADDY}/.ghost/analytics/api/v1/page_hit
+      labs__publicAPI: ${LABS_PUBLIC_API:-false}
+      tinybird__adminToken: DUMMY_TOKEN
+      tinybird__workspaceId: DUMMY_WORKSPACE_ID
+      tinybird__tracker__datasource: analytics_events
+      tinybird__stats__endpoint: ${SERVICE_URL_CADDY}/.ghost/stats
+      tinybird__stats__endpointBrowser: ${SERVICE_URL_CADDY}/.ghost/stats
+    volumes:
+      - 'ghost-content-data:/var/lib/ghost/content'
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q -S -T 3 --spider http://127.0.0.1:2368/ 2>&1 | grep -q 'HTTP/'"
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 120s
+  mysql:
+    image: mysql:8
+    restart: always
+    environment:
+      MYSQL_USER: ${SERVICE_USER_MYSQL}
+      MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL}
+      MYSQL_DATABASE: ${GHOST_DATABASE:-ghost}
+      MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
+    volumes:
+      - 'ghost-mysql-data:/var/lib/mysql'
+    healthcheck:
+      test: mysqladmin ping -p$$MYSQL_ROOT_PASSWORD -h 127.0.0.1
+      interval: 1s
+      start_period: 30s
+      start_interval: 5s
+      timeout: 20s
+      retries: 10
+  clickhouse:
+    build: ./clickhouse
+    restart: always
+    environment:
+      CLICKHOUSE_DB: ghost_analytics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - ghost-clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+  traffic-stats:
+    build: ./traffic-stats
+    restart: always
+    environment:
+      PORT: 3000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DATABASE: ghost_analytics
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/v0/health | grep -q ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+  traffic-analytics:
+    image: ghost/traffic-analytics:1.0.244@sha256:98aba0319ef32634c1be41362a322343e71dc8ac6bd31b426a8e115ad14c3b8e
+    platform: linux/amd64
+    restart: always
+    environment:
+      PROXY_TARGET: http://traffic-stats:3000/v0/events
+      TINYBIRD_WAIT: "true"
+      TRUST_PROXY: "true"
+    depends_on:
+      traffic-stats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/ | grep -q Ghost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+volumes:
+  ghost-content-data:
+  ghost-mysql-data:
+  ghost-clickhouse-data:

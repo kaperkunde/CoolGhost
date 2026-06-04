@@ -1,0 +1,11 @@
+# Local overrides: publish Caddy on the host at CADDY_PORT (default 3000).
+services:
+  ghost:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      NODE_ENV: development
+      tinybird__stats__endpoint: http://caddy:${CADDY_PORT:-3000}/.ghost/stats
+  caddy:
+    ports:
+      - "${CADDY_PORT:-3000}:${CADDY_PORT:-3000}"

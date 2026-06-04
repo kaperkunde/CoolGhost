@@ -1,0 +1,20 @@
+# Environment / secrets
+.env
+!.env.example
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Node (traffic-stats)
+node_modules/
+dist/
+npm-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+
+# Runtime / local data
+*.log
