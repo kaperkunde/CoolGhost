@@ -84,24 +84,28 @@ export async function registerV0Routes(app: FastifyInstance) {
   });
 
   for (const pipe of GHOST_PIPE_NAMES) {
-    app.get(`/v0/pipes/${pipe}.json`, async (req, reply) => {
-      const query = req.query as {token?: string};
-      const check = verifyPipeToken(req.headers.authorization, query.token, pipe);
+    app.route({
+      method: ['GET', 'POST'],
+      url: `/v0/pipes/${pipe}.json`,
+      handler: async (req, reply) => {
+        const query = req.query as {token?: string};
+        const check = verifyPipeToken(req.headers.authorization, query.token, pipe);
 
-      if (!check.ok) {
-        return reply.status(403).send({error: check.error});
-      }
+        if (!check.ok) {
+          return reply.status(403).send({error: check.error});
+        }
 
-      try {
-        const result = await runPipe(
-          pipe as GhostPipeName,
-          check.siteUuid!,
-          req.query as Record<string, string | string[] | undefined>
-        );
-        return result;
-      } catch (err) {
-        req.log.error({err, pipe}, 'Pipe query failed');
-        return reply.status(500).send({error: 'Pipe execution failed'});
+        try {
+          const result = await runPipe(
+            pipe as GhostPipeName,
+            check.siteUuid!,
+            req.query as Record<string, string | string[] | undefined>
+          );
+          return result;
+        } catch (err) {
+          req.log.error({err, pipe}, 'Pipe query failed');
+          return reply.status(500).send({error: 'Pipe execution failed'});
+        }
       }
     });
   }

@@ -3,9 +3,6 @@ services:
     build: ./caddy
     restart: always
     environment:
-      # Caddy listens on $CADDY_PORT (default 80). Coolify routes the public
-      # domain to this service on its default target port (80), so production
-      # needs no port suffix here. Locally CADDY_PORT=3000 (see .env.example).
       - SERVICE_URL_CADDY
       - CADDY_LOG_OUTPUT=${CADDY_LOG_OUTPUT:-discard}
       - CADDY_PORT=${CADDY_PORT:-80}
@@ -23,7 +20,7 @@ services:
       retries: 18
       start_period: 120s
   ghost:
-    image: ghost:6.32.0-alpine@sha256:63183a425e84b87097e44aa111c8b8db877440d2a2a4c59b0d8540e328dc367d
+    image: ghost:${GHOST_VERSION:-6.43.1-alpine@sha256:b03393a2565a72179b18a608f672a60f8e66c9417f7dee1625d0718bf0b320dc}
     environment:
       url: ${SERVICE_URL_CADDY}
       NODE_ENV: production
@@ -114,7 +111,7 @@ services:
       retries: 30
       start_period: 15s
   traffic-analytics:
-    image: ghost/traffic-analytics:1.0.244@sha256:98aba0319ef32634c1be41362a322343e71dc8ac6bd31b426a8e115ad14c3b8e
+    image: ghost/traffic-analytics:${TRAFFIC_ANALYTICS_VERSION:-1.0.244@sha256:98aba0319ef32634c1be41362a322343e71dc8ac6bd31b426a8e115ad14c3b8e}
     platform: linux/amd64
     restart: always
     environment:
