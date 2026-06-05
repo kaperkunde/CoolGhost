@@ -26,7 +26,7 @@ services:
       NODE_ENV: production
       admin__url: ${SERVICE_URL_CADDY}
       database__client: mysql
-      database__connection__host: ${MYSQL_HOST:-mysql}
+      database__connection__host: ${MYSQL_HOST}
       database__connection__port: ${MYSQL_PORT:-3306}
       database__connection__user: ${SERVICE_USER_MYSQL}
       database__connection__password: ${SERVICE_PASSWORD_MYSQL}
@@ -49,9 +49,6 @@ services:
       tinybird__stats__endpointBrowser: ${SERVICE_URL_CADDY}/.ghost/stats
     volumes:
       - 'ghost-content-data:/var/lib/ghost/content'
-    depends_on:
-      mysql:
-        condition: service_healthy
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -60,23 +57,6 @@ services:
       timeout: 5s
       retries: 18
       start_period: 120s
-  mysql:
-    image: mysql:${MYSQL_VERSION:-8@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084}
-    restart: always
-    environment:
-      MYSQL_USER: ${SERVICE_USER_MYSQL}
-      MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL}
-      MYSQL_DATABASE: ${GHOST_DATABASE:-ghost}
-      MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
-    volumes:
-      - 'ghost-mysql-data:/var/lib/mysql'
-    healthcheck:
-      test: mysqladmin ping -p$$MYSQL_ROOT_PASSWORD -h 127.0.0.1
-      interval: 1s
-      start_period: 30s
-      start_interval: 5s
-      timeout: 20s
-      retries: 10
   clickhouse:
     build: ./clickhouse
     restart: always
@@ -130,5 +110,4 @@ services:
       start_period: 10s
 volumes:
   ghost-content-data:
-  ghost-mysql-data:
   ghost-clickhouse-data:
