@@ -26,7 +26,8 @@ services:
       NODE_ENV: production
       admin__url: ${SERVICE_URL_CADDY}
       database__client: mysql
-      database__connection__host: mysql
+      database__connection__host: ${MYSQL_HOST:-mysql}
+      database__connection__port: ${MYSQL_PORT:-3306}
       database__connection__user: ${SERVICE_USER_MYSQL}
       database__connection__password: ${SERVICE_PASSWORD_MYSQL}
       database__connection__database: ${GHOST_DATABASE:-ghost}
@@ -60,7 +61,7 @@ services:
       retries: 18
       start_period: 120s
   mysql:
-    image: mysql:8
+    image: mysql:${MYSQL_VERSION:-8@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084}
     restart: always
     environment:
       MYSQL_USER: ${SERVICE_USER_MYSQL}
