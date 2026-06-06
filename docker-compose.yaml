@@ -6,6 +6,9 @@ services:
       - SERVICE_URL_CADDY
       - CADDY_LOG_OUTPUT=${CADDY_LOG_OUTPUT:-discard}
       - CADDY_PORT=${CADDY_PORT:-80}
+      - GHOST_UPSTREAM=ghost.${COMPOSE_PROJECT_NAME}
+      - TRAFFIC_STATS_UPSTREAM=traffic-stats.${COMPOSE_PROJECT_NAME}
+      - TRAFFIC_ANALYTICS_UPSTREAM=traffic-analytics.${COMPOSE_PROJECT_NAME}
     expose:
       - "${CADDY_PORT:-80}"
     depends_on:

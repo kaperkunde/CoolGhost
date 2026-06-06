@@ -13,14 +13,14 @@
 	}
 
 	handle_path /.ghost/stats/* {
-		reverse_proxy traffic-stats:3000
+		reverse_proxy {$TRAFFIC_STATS_UPSTREAM:traffic-stats}:3000
 	}
 
 	handle_path /.ghost/analytics/* {
-		reverse_proxy traffic-analytics:3000
+		reverse_proxy {$TRAFFIC_ANALYTICS_UPSTREAM:traffic-analytics}:3000
 	}
 
 	handle {
-		reverse_proxy ghost:2368
+		reverse_proxy {$GHOST_UPSTREAM:ghost}:2368
 	}
 }
