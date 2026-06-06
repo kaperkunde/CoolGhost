@@ -14,9 +14,9 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "wget -q -S -T 3 --spider http://127.0.0.1:$${CADDY_PORT}/ 2>&1 | grep -q 'HTTP/'"
+        - 'wget -q -O /dev/null -T 4 --header="X-Forwarded-Proto: https" http://127.0.0.1:$${CADDY_PORT}/ghost/api/admin/site/'
       interval: 10s
-      timeout: 5s
+      timeout: 8s
       retries: 18
       start_period: 120s
   ghost:
@@ -52,9 +52,9 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "wget -q -S -T 3 --spider http://127.0.0.1:2368/ 2>&1 | grep -q 'HTTP/'"
+        - 'wget -q -O /dev/null -T 4 --header="X-Forwarded-Proto: https" http://127.0.0.1:2368/ghost/api/admin/site/'
       interval: 10s
-      timeout: 5s
+      timeout: 8s
       retries: 18
       start_period: 120s
   clickhouse:
