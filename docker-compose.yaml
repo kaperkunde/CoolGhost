@@ -6,9 +6,8 @@ services:
       - SERVICE_URL_CADDY
       - CADDY_LOG_OUTPUT=${CADDY_LOG_OUTPUT:-discard}
       - CADDY_PORT=${CADDY_PORT:-80}
-      - GHOST_UPSTREAM=ghost.${COMPOSE_PROJECT_NAME}
-      - TRAFFIC_STATS_UPSTREAM=traffic-stats.${COMPOSE_PROJECT_NAME}
-      - TRAFFIC_ANALYTICS_UPSTREAM=traffic-analytics.${COMPOSE_PROJECT_NAME}
+      - TRAFFIC_STATS_HOST=${TRAFFIC_STATS_HOST:-traffic-stats}
+      - TRAFFIC_ANALYTICS_HOST=${TRAFFIC_ANALYTICS_HOST:-traffic-analytics}
     expose:
       - "${CADDY_PORT:-80}"
     depends_on:
@@ -60,57 +59,5 @@ services:
       timeout: 8s
       retries: 18
       start_period: 120s
-  clickhouse:
-    build: ./clickhouse
-    restart: always
-    environment:
-      CLICKHOUSE_DB: ghost_analytics
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
-    volumes:
-      - ghost-clickhouse-data:/var/lib/clickhouse
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8123/ping | grep -q Ok"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
-  traffic-stats:
-    build: ./traffic-stats
-    restart: always
-    environment:
-      PORT: 3000
-      CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_DATABASE: ghost_analytics
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/v0/health | grep -q ok"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 15s
-  traffic-analytics:
-    image: ghost/traffic-analytics:${TRAFFIC_ANALYTICS_VERSION:-1.0.244@sha256:98aba0319ef32634c1be41362a322343e71dc8ac6bd31b426a8e115ad14c3b8e}
-    platform: linux/amd64
-    restart: always
-    environment:
-      PROXY_TARGET: http://traffic-stats:3000/v0/events
-      TINYBIRD_WAIT: "true"
-      TRUST_PROXY: "true"
-    depends_on:
-      traffic-stats:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/ | grep -q Ghost"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 10s
 volumes:
   ghost-content-data:
-  ghost-clickhouse-data:

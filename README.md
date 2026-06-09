@@ -1,6 +1,6 @@
 # CoolGhost
 
-Fully self-hosted [Ghost 6](https://ghost.org) with self-hosted analytics, packaged as a single Docker Compose stack for [Coolify](https://coolify.io) (or plain Docker Compose).
+Fully self-hosted [Ghost 6](https://ghost.org) with self-hosted analytics, packaged as Docker Compose for [Coolify](https://coolify.io) (or plain Docker Compose). Shared infrastructure (MySQL, ClickHouse, analytics services) lives in separate compose files so you can run multiple Ghost sites on one server.
 
 ## Why
 
@@ -11,28 +11,43 @@ CoolGhost removes the cloud dependency by running **ClickHouse locally** and map
 ## Architecture
 
 ```
-Browser ──▶ Caddy :3000 ──┬─▶ Ghost  :2368        (CMS + Admin)
-                          ├─▶ traffic-analytics    (/.ghost/analytics/*  — official ingest)
-                          └─▶ traffic-stats        (/.ghost/stats/*      — Tinybird-compatible query API)
-                                   │
-                                   ▼
-                              ClickHouse :8123  ◀── MySQL :3306 (Ghost content)
+Per site (docker-compose.yaml):
+  Browser ──▶ Caddy ──▶ Ghost :2368  (CMS + Admin)
+                ├─▶ traffic-analytics  (/.ghost/analytics/*)
+                └─▶ traffic-stats      (/.ghost/stats/*)
+
+Shared (docker-compose.analytics.yaml):
+  traffic-analytics ──▶ traffic-stats ──▶ ClickHouse :8123
+
+Shared (docker-compose.mysql.yaml):
+  MySQL :3306  (one database per site)
 ```
+
+| Compose file                  | Services                                                                      |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `docker-compose.yaml`         | `caddy`, `ghost` — deploy **one resource per site**.                          |
+| `docker-compose.analytics.yaml` | `clickhouse`, `traffic-stats`, `traffic-analytics` — deploy **once** per server. |
+| `docker-compose.mysql.yaml`   | `mysql` — deploy **once** per server.                                         |
 
 | Service             | Role                                                                                  |
 | ------------------- | ------------------------------------------------------------------------------------- |
-| `caddy`             | Reverse proxy / single public entrypoint on port `3000`.                              |
+| `caddy`             | Reverse proxy / public entrypoint for each site.                                      |
 | `ghost`             | Ghost 6 CMS and Admin.                                                                 |
-| `mysql`             | Ghost's primary database.                                                             |
+| `mysql`             | Ghost's primary database (shared server, separate DB per site).                       |
 | `clickhouse`        | Self-hosted analytics store (replaces Tinybird Cloud).                                 |
 | `traffic-analytics` | Official Ghost ingest service; forwards page hits to `traffic-stats`.                  |
 | `traffic-stats`     | Custom Fastify service that speaks Ghost's Tinybird API and queries ClickHouse. See [`traffic-stats/README.md`](traffic-stats/README.md). |
 
+Analytics data is shared in one ClickHouse database and scoped per site by `site_uuid` (same model as Tinybird).
+
 ## Quick deployment (Coolify)
 
 1. **Create a [Mailgun](https://www.mailgun.com) account** (or have your SMTP credentials ready) — Ghost needs email for staff invites, password resets, and member magic links.
-2. In the Coolify UI, **add a new resource → Docker Compose** and point it at this repository (`https://github.com/kaperkunde/CoolGhost.git`) — see [Coolify's Docker Compose docs](https://coolify.io/docs/applications/docker-compose).
-3. Set the **environment variables** (Coolify → your resource → Environment Variables):
+2. Deploy **shared infrastructure** (once per server) as separate Coolify Docker Compose resources:
+   - `docker-compose.mysql.yaml`
+   - `docker-compose.analytics.yaml`
+3. Deploy **each Ghost site** using `docker-compose.yaml` — see [Coolify's Docker Compose docs](https://coolify.io/docs/applications/docker-compose).
+4. Set the **environment variables** on each site resource (Coolify → your resource → Environment Variables):
 
    | Variable                | Required | Description                                                            |
    | ----------------------- | -------- | ---------------------------------------------------------------------- |
@@ -48,10 +63,13 @@ Browser ──▶ Caddy :3000 ──┬─▶ Ghost  :2368        (CMS + Admin)
    | `MAIL_OPTIONS_PORT`     |          | SMTP port (default `465`).                                             |
    | `MAIL_OPTIONS_SECURE`   |          | Use TLS (default `true`).                                              |
    | `MAIL_OPTIONS_SERVICE`  |          | Mail service name (default `Mailgun`).                                 |
-   | `GHOST_DATABASE`        |          | Database name (default `ghost`).                                       |
+   | `MYSQL_HOST`            | ✅        | Hostname of the shared MySQL service (on the Coolify network).         |
+   | `GHOST_DATABASE`        | ✅        | MySQL database for this site, e.g. `godutch` or `kaperkunde_en`.       |
+   | `TRAFFIC_STATS_HOST`    |          | Hostname of shared `traffic-stats` (default `traffic-stats`).          |
+   | `TRAFFIC_ANALYTICS_HOST`|          | Hostname of shared `traffic-analytics` (default `traffic-analytics`).  |
    | `CADDY_LOG_OUTPUT`      |          | Caddy access log target (default `discard`).                           |
 
-4. **Launch** — and you're good to go. Open `SERVICE_URL_CADDY` and finish setup at `/ghost`.
+5. **Launch** — and you're good to go. Open `SERVICE_URL_CADDY` and finish setup at `/ghost`.
 
 ## Local deployment
 
@@ -59,7 +77,11 @@ Browser ──▶ Caddy :3000 ──┬─▶ Ghost  :2368        (CMS + Admin)
 git clone https://github.com/kaperkunde/CoolGhost.git
 cd CoolGhost
 cp .env.example .env          # defaults already target http://localhost:3000
-docker compose -f docker-compose.yaml -f docker-compose.local.yaml up -d
+docker compose \
+  -f docker-compose.yaml \
+  -f docker-compose.mysql.yaml \
+  -f docker-compose.analytics.yaml \
+  -f docker-compose.local.yaml up -d
 ```
 
 Then open **http://localhost:3000** for the site and **http://localhost:3000/ghost** for Admin (and analytics). The `docker-compose.local.yaml` override publishes Caddy on host port `3000` and runs Ghost in development mode (see below).
