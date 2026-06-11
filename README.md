@@ -2,7 +2,7 @@
 
 This branch splits CoolGhost into **shared** and **per-site** compose stacks for running multiple Ghost blogs on one Coolify server.
 
-For the full project overview, architecture, analytics behaviour, and local development setup, see the [`main` branch README](https://github.com/kaperkunde/CoolGhost/blob/main/README.md).
+For the full project overview, architecture, and analytics behaviour, see the [`main` branch README](https://github.com/kaperkunde/CoolGhost/blob/main/README.md).
 
 ## What to deploy
 
