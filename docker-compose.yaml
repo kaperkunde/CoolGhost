@@ -18,10 +18,10 @@ services:
       mail__from: ${MAIL_FROM}
       mail__options__auth__pass: ${MAIL_OPTIONS_AUTH_PASS}
       mail__options__auth__user: ${MAIL_OPTIONS_AUTH_USER}
-      mail__options__secure: ${MAIL_OPTIONS_SECURE:-true}
-      mail__options__port: ${MAIL_OPTIONS_PORT:-465}
-      mail__options__service: ${MAIL_OPTIONS_SERVICE:-Mailgun}
       mail__options__host: ${MAIL_OPTIONS_HOST}
+      mail__options__port: ${MAIL_OPTIONS_PORT:-587}
+      mail__options__secure: ${MAIL_OPTIONS_SECURE:-false}
+      security__staffDeviceVerification: ${STAFF_DEVICE_VERIFICATION:-true}
       analytics__enabled: "true"
       tinybird__tracker__endpoint: ${SERVICE_URL_GHOST}/.ghost/analytics/api/v1/page_hit
       labs__publicAPI: ${LABS_PUBLIC_API:-false}
