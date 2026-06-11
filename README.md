@@ -1,104 +1,90 @@
-# CoolGhost
+# CoolGhost — shared infrastructure
 
-Fully self-hosted [Ghost 6](https://ghost.org) with self-hosted analytics, packaged as Docker Compose for [Coolify](https://coolify.io) (or plain Docker Compose). Shared infrastructure (MySQL, ClickHouse, analytics services) lives in separate compose files so you can run multiple Ghost sites on one server.
+This branch splits CoolGhost into **shared** and **per-site** compose stacks for running multiple Ghost blogs on one Coolify server.
 
-## Why
+For the full project overview, architecture, and analytics behaviour, see the [`main` branch README](https://github.com/kaperkunde/CoolGhost/blob/main/README.md).
 
-Ghost 6 ships a great analytics dashboard (Top content, Sources, Locations, visitor KPIs), but it expects [Tinybird](https://www.tinybird.co) — a cloud-hosted ClickHouse service — for storage and queries. The official [TryGhost/ghost-docker](https://github.com/TryGhost/ghost-docker) setup still relies on that third‑party cloud dependency, which is awkward to wire up in Coolify and means the instance isn't *truly* self-hosted.
+## What to deploy
 
-CoolGhost removes the cloud dependency by running **ClickHouse locally** and mapping the Tinybird ingest/query API that Ghost expects onto that local instance — so analytics work end to end with nothing leaving your server.
+| Resource | Compose file | How many |
+| -------- | ------------ | -------- |
+| MySQL | `docker-compose.mysql.yaml` | Once per server |
+| Analytics | `docker-compose.analytics.yaml` | Once per server |
+| Traefik routes | `traefik.coolghost.yaml` | Once per server (see below) |
+| Ghost site | `docker-compose.yaml` | One per blog |
 
-## Architecture
+## Coolify setup
 
-```
-Per site (docker-compose.yaml):
-  Browser ──▶ Caddy ──▶ Ghost :2368  (CMS + Admin)
-                ├─▶ traffic-analytics  (/.ghost/analytics/*)
-                └─▶ traffic-stats      (/.ghost/stats/*)
+Deploy each compose file as a separate Coolify Docker Compose resource.
 
-Shared (docker-compose.analytics.yaml):
-  traffic-analytics ──▶ traffic-stats ──▶ ClickHouse :8123
+On **every** resource — MySQL, analytics, and each blog — open **Advanced** and enable **Connect to Predefined Network**. Without this, stacks cannot reach each other on the shared `coolify` network.
 
-Shared (docker-compose.mysql.yaml):
-  MySQL :3306  (one database per site)
-```
+Give each shared stack a **custom name** in Advanced (e.g. `mysql-ghost` for MySQL, `ghost-analytics` for analytics). Coolify uses these names for cross-stack DNS — the hostname is the custom name with a **trailing dash**, e.g. `mysql-ghost-`.
 
-| Compose file                  | Services                                                                      |
-| ----------------------------- | ----------------------------------------------------------------------------- |
-| `docker-compose.yaml`         | `caddy`, `ghost` — deploy **one resource per site**.                          |
-| `docker-compose.analytics.yaml` | `clickhouse`, `traffic-stats`, `traffic-analytics` — deploy **once** per server. |
-| `docker-compose.mysql.yaml`   | `mysql` — deploy **once** per server.                                         |
+### 1. MySQL (`docker-compose.mysql.yaml`)
 
-| Service             | Role                                                                                  |
-| ------------------- | ------------------------------------------------------------------------------------- |
-| `caddy`             | Reverse proxy / public entrypoint for each site.                                      |
-| `ghost`             | Ghost 6 CMS and Admin.                                                                 |
-| `mysql`             | Ghost's primary database (shared server, separate DB per site).                       |
-| `clickhouse`        | Self-hosted analytics store (replaces Tinybird Cloud).                                 |
-| `traffic-analytics` | Official Ghost ingest service; forwards page hits to `traffic-stats`.                  |
-| `traffic-stats`     | Custom Fastify service that speaks Ghost's Tinybird API and queries ClickHouse. See [`traffic-stats/README.md`](traffic-stats/README.md). |
+Set `SERVICE_USER_MYSQL`, `SERVICE_PASSWORD_MYSQL`, `SERVICE_PASSWORD_MYSQLROOT`, and an initial `GHOST_DATABASE` (only used to bootstrap the container; each blog gets its own database later).
 
-Analytics data is shared in one ClickHouse database and scoped per site by `site_uuid` (same model as Tinybird).
+### 2. Analytics (`docker-compose.analytics.yaml`)
 
-## Quick deployment (Coolify)
+Deploy once with custom name **`ghost-analytics`**. No extra configuration beyond the shared env vars Coolify provides.
 
-1. **Create a [Mailgun](https://www.mailgun.com) account** (or have your SMTP credentials ready) — Ghost needs email for staff invites, password resets, and member magic links.
-2. Deploy **shared infrastructure** (once per server) as separate Coolify Docker Compose resources:
-   - `docker-compose.mysql.yaml`
-   - `docker-compose.analytics.yaml`
-3. Deploy **each Ghost site** using `docker-compose.yaml` — see [Coolify's Docker Compose docs](https://coolify.io/docs/applications/docker-compose).
-4. Set the **environment variables** on each site resource (Coolify → your resource → Environment Variables):
+### 3. Traefik routes (once per server)
 
-   | Variable                | Required | Description                                                            |
-   | ----------------------- | -------- | ---------------------------------------------------------------------- |
-   | `SERVICE_URL_CADDY`     | ✅        | Public URL of your Ghost site, e.g. `https://blog.example.com`.        |
-   | `SERVICE_HOST_CADDY`    | ✅        | Bare hostname of the URL above, e.g. `blog.example.com` (see Analytics notes). |
-   | `SERVICE_USER_MYSQL`    | ✅        | MySQL user for Ghost.                                                  |
-   | `SERVICE_PASSWORD_MYSQL`| ✅        | MySQL password for Ghost.                                              |
-   | `SERVICE_PASSWORD_MYSQLROOT` | ✅   | MySQL root password.                                                   |
-   | `MAIL_FROM`             | ✅        | Default from address, e.g. `Ghost <noreply@blog.example.com>`.         |
-   | `MAIL_OPTIONS_AUTH_USER`| ✅        | Mailgun SMTP username.                                                 |
-   | `MAIL_OPTIONS_AUTH_PASS`| ✅        | Mailgun SMTP password.                                                 |
-   | `MAIL_OPTIONS_HOST`     | ✅        | SMTP host, e.g. `smtp.eu.mailgun.org`.                                 |
-   | `MAIL_OPTIONS_PORT`     |          | SMTP port (default `465`).                                             |
-   | `MAIL_OPTIONS_SECURE`   |          | Use TLS (default `true`).                                              |
-   | `MAIL_OPTIONS_SERVICE`  |          | Mail service name (default `Mailgun`).                                 |
-   | `MYSQL_HOST`            | ✅        | Hostname of the shared MySQL service (on the Coolify network).         |
-   | `GHOST_DATABASE`        | ✅        | MySQL database for this site, e.g. `godutch` or `kaperkunde_en`.       |
-   | `TRAFFIC_STATS_HOST`    |          | Hostname of shared `traffic-stats` (default `traffic-stats`).          |
-   | `TRAFFIC_ANALYTICS_HOST`|          | Hostname of shared `traffic-analytics` (default `traffic-analytics`).  |
-   | `CADDY_LOG_OUTPUT`      |          | Caddy access log target (default `discard`).                           |
+Coolify already runs Traefik (`coolify-proxy`) on port 443. Each Ghost blog needs `/.ghost/stats` and `/.ghost/analytics` routed to the **shared** analytics stack on whatever domain Coolify assigns.
 
-5. **Launch** — and you're good to go. Open `SERVICE_URL_CADDY` and finish setup at `/ghost`.
+1. Confirm analytics is reachable from the proxy:
 
-## Local deployment
+   ```bash
+   docker exec coolify-proxy wget -qO- http://traffic-stats-ghost-analytics-:3000/v0/health
+   docker exec coolify-proxy wget -qO- http://traffic-analytics-ghost-analytics-:3000/
+   ```
+
+   If those fail, check that the analytics stack uses custom name `ghost-analytics` and is connected to the predefined network. Adjust the hostnames in `traefik.coolghost.yaml` if you chose a different custom name (`<service>-<custom-name>-`).
+
+2. Open **Server → Proxy → Dynamic Configurations → Add**.
+
+3. Paste the contents of [`traefik.coolghost.yaml`](traefik.coolghost.yaml). Update the two service URLs if your stack custom name is not `ghost-analytics`.
+
+4. Save. Traefik reloads automatically — no proxy restart needed.
+
+The config registers four routers (HTTP + HTTPS) with **priority 2000** so they win over each blog's default `Host(...)` router for paths under `/.ghost/stats` and `/.ghost/analytics`. Ghost itself is still routed by Coolify per deployment.
+
+### 4. Each blog (`docker-compose.yaml`)
+
+The blog stack is a single **Ghost** service. Assign the public domain to **ghost** (port **2368**) in Coolify.
+
+Per-site environment variables (full list and descriptions are on [`main`](https://github.com/kaperkunde/CoolGhost/blob/main/README.md#quick-deployment-coolify)):
+
+| Variable | Notes |
+| -------- | ----- |
+| `SERVICE_URL_GHOST` | Public URL, e.g. `https://blog.example.com` (Coolify magic var) |
+| `SERVICE_FQDN_GHOST` | Bare hostname, e.g. `blog.example.com` (Coolify magic var) |
+| `MYSQL_HOST` | Shared MySQL stack hostname, e.g. `mysql-ghost-` |
+| `GHOST_DATABASE` | This site's database name |
+| `SERVICE_USER_MYSQL` | This site's MySQL user |
+| `SERVICE_PASSWORD_MYSQL` | This site's MySQL password |
+| Mail vars | `MAIL_FROM`, `MAIL_OPTIONS_*` — see main README |
+
+Open `SERVICE_URL_GHOST` and finish setup at `/ghost`.
+
+## MySQL: one database per blog
+
+Each blog needs its **own** MySQL database and user. Create them manually, or use [`scripts/createtable.sh`](scripts/createtable.sh) on the server:
 
 ```bash
-git clone https://github.com/kaperkunde/CoolGhost.git
-cd CoolGhost
-cp .env.example .env          # defaults already target http://localhost:3000
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.mysql.yaml \
-  -f docker-compose.analytics.yaml \
-  -f docker-compose.local.yaml up -d
+./scripts/createtable.sh <mysql-container> <name> <password>
 ```
 
-Then open **http://localhost:3000** for the site and **http://localhost:3000/ghost** for Admin (and analytics). The `docker-compose.local.yaml` override publishes Caddy on host port `3000` and runs Ghost in development mode (see below).
+This creates a database `<name>`, user `<name>`@`%`, and grants full access to that database. Use the same values for `GHOST_DATABASE`, `SERVICE_USER_MYSQL`, and `SERVICE_PASSWORD_MYSQL` on the blog resource.
 
-## Analytics notes
+Example:
 
-Ghost makes analytics requests two ways, and both must reach `traffic-stats` through Caddy:
+```bash
+./scripts/createtable.sh mysql-edtcy0qssaygae7y63jotnnj-065108521543 kaperkunde_nl 'your-secure-password'
+```
 
-- **Browser-side** (Sources, Locations) hit the public URL directly — no special handling needed.
-- **Server-side** (Top content) go through Ghost's SSRF-protected HTTP client, which rejects single-label hostnames (like `caddy`) and private Docker IPs. The only production-safe bypass is making the request host **string-match the site URL host**.
-
-That's why:
-
-- In **production**, `tinybird__stats__endpoint` points at the public URL and `SERVICE_HOST_CADDY` is added as a Caddy network alias, so the public hostname resolves to Caddy *inside* the Docker network.
-- **Locally**, `localhost` can't be routed to Caddy from inside the container, so the override runs Ghost with `NODE_ENV=development` (which skips the SSRF checks) and points the server-side endpoint straight at `http://caddy:3000`.
-
-The ClickHouse schema (events table + materialized view) is created automatically on first boot from [`clickhouse/init/01_schema.sql`](clickhouse/init/01_schema.sql).
+Find the MySQL container name with `docker ps`.
 
 ## License
 

@@ -16,3 +16,5 @@ services:
       start_interval: 5s
       timeout: 20s
       retries: 10
+volumes:
+  ghost-mysql-data:
