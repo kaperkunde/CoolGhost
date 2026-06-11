@@ -1,0 +1,76 @@
+# CoolGhost shared analytics routes for Coolify Traefik.
+#
+# Install once per server:
+#   Coolify → Server → Proxy → Dynamic Configurations → Add
+#   Paste this file after verifying the service URLs below resolve from
+#   coolify-proxy (see README "Verify analytics routing").
+#
+# Requires:
+#   - ONE analytics stack on the shared "coolify" network
+#   - Blog stacks connected to the same network
+#
+# Routes /.ghost/stats and /.ghost/analytics on ANY domain to the shared
+# traffic-stats / traffic-analytics services. Ghost itself is routed by
+# Coolify per deployment.
+
+http:
+  routers:
+    coolghost-stats-https:
+      rule: PathPrefix(`/.ghost/stats`)
+      entryPoints:
+        - https
+      service: coolghost-stats
+      middlewares:
+        - coolghost-stats-strip
+      priority: 2000
+      tls: {}
+
+    coolghost-analytics-https:
+      rule: PathPrefix(`/.ghost/analytics`)
+      entryPoints:
+        - https
+      service: coolghost-analytics
+      middlewares:
+        - coolghost-analytics-strip
+      priority: 2000
+      tls: {}
+
+    coolghost-stats-http:
+      rule: PathPrefix(`/.ghost/stats`)
+      entryPoints:
+        - http
+      middlewares:
+        - redirect-to-https
+      service: coolghost-stats
+      priority: 2000
+
+    coolghost-analytics-http:
+      rule: PathPrefix(`/.ghost/analytics`)
+      entryPoints:
+        - http
+      middlewares:
+        - redirect-to-https
+      service: coolghost-analytics
+      priority: 2000
+
+  middlewares:
+    coolghost-stats-strip:
+      stripPrefix:
+        prefixes:
+          - /.ghost/stats
+
+    coolghost-analytics-strip:
+      stripPrefix:
+        prefixes:
+          - /.ghost/analytics
+
+  services:
+    coolghost-stats:
+      loadBalancer:
+        servers:
+          - url: http://traffic-stats:3000
+
+    coolghost-analytics:
+      loadBalancer:
+        servers:
+          - url: http://traffic-analytics:3000

@@ -7,7 +7,7 @@ It lets the Ghost Admin "Analytics" views (visitor KPIs, Top content, Sources, L
 ## How it fits in
 
 ```
-Ghost Admin ──▶ Caddy /.ghost/stats/* ──▶ traffic-stats ──▶ ClickHouse
+Ghost Admin ──▶ Traefik /.ghost/stats/* ──▶ traffic-stats ──▶ ClickHouse
 ```
 
 - Ghost sends Tinybird-style pipe requests (`/v0/pipes/<name>.json`) with a signed JWT.
@@ -37,7 +37,7 @@ Set via environment variables (defaults shown):
 | `CLICKHOUSE_URL`            | `http://clickhouse:8123`  | ClickHouse HTTP endpoint.            |
 | `CLICKHOUSE_DATABASE`       | `ghost_analytics`         | Database holding the analytics tables. |
 | `TINYBIRD_EVENTS_DATASOURCE`| `analytics_events`        | Datasource name for ingested events. |
-| `TRUST_PROXY`               | `true`                    | Trust `X-Forwarded-*` from Caddy.    |
+| `TRUST_PROXY`               | `true`                    | Trust `X-Forwarded-*` from Traefik.  |
 
 > JWTs are accepted using Ghost's local dummy workspace/token (`DUMMY_TOKEN` / `DUMMY_WORKSPACE_ID`); the `site_uuid` is taken from the token's fixed params so each request is scoped to one site.
 
@@ -50,4 +50,4 @@ npm run build    # tsc -> dist/
 npm start        # node dist/server.js
 ```
 
-The service is built and run as part of the root `docker-compose.yaml` (`build: ./traffic-stats`); you normally don't run it directly.
+The service is built and run as part of `docker-compose.analytics.yaml`; you normally don't run it directly.
