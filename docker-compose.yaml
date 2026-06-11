@@ -28,7 +28,7 @@ services:
       NODE_ENV: production
       admin__url: ${SERVICE_URL_CADDY}
       database__client: mysql
-      database__connection__host: ${MYSQL_HOST}
+      database__connection__host: ${MYSQL_HOST:-mysql}
       database__connection__port: ${MYSQL_PORT:-3306}
       database__connection__user: ${SERVICE_USER_MYSQL}
       database__connection__password: ${SERVICE_PASSWORD_MYSQL}
