@@ -4,12 +4,13 @@ services:
     restart: always
     environment:
       PORT: 3000
-      API_TOKEN: ${API_TOKEN}
+      API_TOKEN: ${API_TOKEN:-${SERVICE_BASE64_TOKEN}}
       MYSQL_HOST: ${MYSQL_HOST:-mysql}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${SERVICE_PASSWORD_MYSQLROOT}}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/health | grep -q ok"]
+      test:
+        ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/health | grep -q ok"]
       interval: 5s
       timeout: 5s
       retries: 30
