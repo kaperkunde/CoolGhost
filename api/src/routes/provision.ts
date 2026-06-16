@@ -2,6 +2,7 @@ import { Router } from "express"
 
 import { readProvisionCredentials } from "../lib/read-provision-credentials.js"
 import {
+  formatMysqlError,
   provisionMysqlUser,
   ProvisionValidationError,
 } from "../lib/provision-mysql-user.js"
@@ -41,7 +42,7 @@ provisionRouter.post(
       })
 
       res.status(500).json({
-        error: "Could not provision MySQL user",
+        error: formatMysqlError(error),
       })
     }
   },

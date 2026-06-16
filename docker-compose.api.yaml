@@ -5,12 +5,16 @@ services:
     environment:
       PORT: 3000
       API_TOKEN: ${API_TOKEN:-${SERVICE_BASE64_TOKEN}}
-      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      # Required on Coolify: shared MySQL stack hostname (custom name + trailing dash).
+      MYSQL_HOST: ${MYSQL_HOST:?Set MYSQL_HOST to the shared MySQL hostname, e.g. mysql-ghost-}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${SERVICE_PASSWORD_MYSQLROOT}}
     healthcheck:
       test:
-        ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/health | grep -q ok"]
+        [
+          "CMD-SHELL",
+          "wget -q -O- http://127.0.0.1:3000/health | grep -q '\"mysql\":true'",
+        ]
       interval: 5s
       timeout: 5s
       retries: 30

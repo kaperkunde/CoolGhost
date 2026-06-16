@@ -1,6 +1,7 @@
 import express from "express"
 
 import { config } from "./config.js"
+import { checkMysqlConnectivity, formatMysqlError } from "./lib/mysql-connectivity.js"
 import { provisionRouter } from "./routes/provision.js"
 
 const JSON_BODY_LIMIT = "1kb"
@@ -12,12 +13,28 @@ app.use(express.json({ limit: JSON_BODY_LIMIT }))
 app.get("/", (_req, res) => {
   res.json({
     service: "ghosthost-api",
+    health: "GET /health",
     provision: "POST /v1/provision/mysql-user",
   })
 })
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true })
+app.get("/health", async (_req, res) => {
+  try {
+    await checkMysqlConnectivity()
+    res.json({ ok: true, mysql: true })
+  } catch (error) {
+    console.error("MySQL health check failed", {
+      host: config.mysqlHost,
+      port: config.mysqlPort,
+      error,
+    })
+
+    res.status(503).json({
+      ok: false,
+      mysql: false,
+      error: formatMysqlError(error),
+    })
+  }
 })
 
 app.use("/v1/provision", provisionRouter)

@@ -6,13 +6,13 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 
 ## What to deploy
 
-| Resource | Compose file | How many |
-| -------- | ------------ | -------- |
-| MySQL | `docker-compose.mysql.yaml` | Once per server |
-| Analytics | `docker-compose.analytics.yaml` | Once per server |
-| GhostHost API | `docker-compose.api.yaml` | Once per server |
-| Traefik routes | `traefik.coolghost.yaml` | Once per server (see below) |
-| Ghost site | `docker-compose.yaml` | One per blog |
+| Resource       | Compose file                    | How many                    |
+| -------------- | ------------------------------- | --------------------------- |
+| MySQL          | `docker-compose.mysql.yaml`     | Once per server             |
+| Analytics      | `docker-compose.analytics.yaml` | Once per server             |
+| GhostHost API  | `docker-compose.api.yaml`       | Once per server             |
+| Traefik routes | `traefik.coolghost.yaml`        | Once per server (see below) |
+| Ghost site     | `docker-compose.yaml`           | One per blog                |
 
 ## Coolify setup
 
@@ -57,14 +57,16 @@ Deploy once per server with custom name **`ghosthost-api`**. This small HTTP ser
 
 Set these environment variables on the Coolify resource:
 
-| Variable | Notes |
-| -------- | ----- |
-| `API_TOKEN` | Shared secret; GhostHost sends it as `Authorization: Bearer …` |
-| `MYSQL_HOST` | Shared MySQL hostname, e.g. `mysql-ghost-` |
-| `MYSQL_PORT` | Optional; defaults to `3306` |
+| Variable              | Notes                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| `API_TOKEN`           | Shared secret; GhostHost sends it as `Authorization: Bearer …`                        |
+| `MYSQL_HOST`          | Shared MySQL hostname, e.g. `mysql-ghost-`                                            |
+| `MYSQL_PORT`          | Optional; defaults to `3306`                                                          |
 | `MYSQL_ROOT_PASSWORD` | Root password for the shared MySQL stack (falls back to `SERVICE_PASSWORD_MYSQLROOT`) |
 
 Keep the API on the internal Coolify network only — do not expose it on a public domain unless you add additional access controls.
+
+`GET /health` verifies MySQL connectivity via `MYSQL_HOST` / `MYSQL_ROOT_PASSWORD`. The container healthcheck uses the same endpoint, so Coolify shows **unhealthy** when MySQL is unreachable. GhostHost admin checks `/health` when saving server API settings. If it fails, fix `MYSQL_HOST` (Coolify custom name + trailing dash, e.g. `mysql-ghost-`), `MYSQL_ROOT_PASSWORD`, and predefined-network connectivity.
 
 **Endpoint:** `POST /v1/provision/mysql-user`
 
@@ -100,15 +102,15 @@ The blog stack is a single **Ghost** service. Assign the public domain to **ghos
 
 Per-site environment variables (full list and descriptions are on [`main`](https://github.com/kaperkunde/CoolGhost/blob/main/README.md#quick-deployment-coolify)):
 
-| Variable | Notes |
-| -------- | ----- |
-| `SERVICE_URL_GHOST` | Public URL, e.g. `https://blog.example.com` (Coolify magic var) |
-| `SERVICE_FQDN_GHOST` | Bare hostname, e.g. `blog.example.com` (Coolify magic var) |
-| `MYSQL_HOST` | Shared MySQL stack hostname, e.g. `mysql-ghost-` |
-| `GHOST_DATABASE` | This site's database name |
-| `SERVICE_USER_MYSQL` | This site's MySQL user |
-| `SERVICE_PASSWORD_MYSQL` | This site's MySQL password |
-| Mail vars | `MAIL_FROM`, `MAIL_OPTIONS_*` — see main README |
+| Variable                 | Notes                                                           |
+| ------------------------ | --------------------------------------------------------------- |
+| `SERVICE_URL_GHOST`      | Public URL, e.g. `https://blog.example.com` (Coolify magic var) |
+| `SERVICE_FQDN_GHOST`     | Bare hostname, e.g. `blog.example.com` (Coolify magic var)      |
+| `MYSQL_HOST`             | Shared MySQL stack hostname, e.g. `mysql-ghost-`                |
+| `GHOST_DATABASE`         | This site's database name                                       |
+| `SERVICE_USER_MYSQL`     | This site's MySQL user                                          |
+| `SERVICE_PASSWORD_MYSQL` | This site's MySQL password                                      |
+| Mail vars                | `MAIL_FROM`, `MAIL_OPTIONS_*` — see main README                 |
 
 Open `SERVICE_URL_GHOST` and finish setup at `/ghost`.
 

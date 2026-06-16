@@ -1,6 +1,9 @@
 import mysql from "mysql2/promise"
 
-import { config } from "../config.js"
+import {
+  formatMysqlError,
+  mysqlConnectionOptions,
+} from "./mysql-connectivity.js"
 
 export const MYSQL_USERNAME_REGEX = /^[A-Za-z0-9_]+$/
 
@@ -52,8 +55,7 @@ async function passwordMatches(
 ): Promise<boolean> {
   try {
     const probe = await mysql.createConnection({
-      host: config.mysqlHost,
-      port: config.mysqlPort,
+      ...mysqlConnectionOptions(),
       user: username,
       password,
       database: databaseName,
@@ -82,13 +84,7 @@ export async function provisionMysqlUser({
   }
 
   const databaseName = username
-  const connection = await mysql.createConnection({
-    host: config.mysqlHost,
-    port: config.mysqlPort,
-    user: "root",
-    password: config.mysqlRootPassword,
-    multipleStatements: true,
-  })
+  const connection = await mysql.createConnection(mysqlConnectionOptions())
 
   try {
     const existedBefore = await userExists(connection, username)
@@ -136,3 +132,5 @@ export class ProvisionValidationError extends Error {
     this.name = "ProvisionValidationError"
   }
 }
+
+export { formatMysqlError }
