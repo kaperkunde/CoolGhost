@@ -10,6 +10,7 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 | -------- | ------------ | -------- |
 | MySQL | `docker-compose.mysql.yaml` | Once per server |
 | Analytics | `docker-compose.analytics.yaml` | Once per server |
+| GhostHost API | `docker-compose.api.yaml` | Once per server |
 | Traefik routes | `traefik.coolghost.yaml` | Once per server (see below) |
 | Ghost site | `docker-compose.yaml` | One per blog |
 
@@ -17,9 +18,9 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 
 Deploy each compose file as a separate Coolify Docker Compose resource.
 
-On **every** resource — MySQL, analytics, and each blog — open **Advanced** and enable **Connect to Predefined Network**. Without this, stacks cannot reach each other on the shared `coolify` network.
+On **every** resource — MySQL, analytics, GhostHost API, and each blog — open **Advanced** and enable **Connect to Predefined Network**. Without this, stacks cannot reach each other on the shared `coolify` network.
 
-Give each shared stack a **custom name** in Advanced (e.g. `mysql-ghost` for MySQL, `ghost-analytics` for analytics). Coolify uses these names for cross-stack DNS — the hostname is the custom name with a **trailing dash**, e.g. `mysql-ghost-`.
+Give each shared stack a **custom name** in Advanced (e.g. `mysql-ghost` for MySQL, `ghost-analytics` for analytics, `ghosthost-api` for the API). Coolify uses these names for cross-stack DNS — the hostname is the custom name with a **trailing dash**, e.g. `mysql-ghost-`.
 
 ### 1. MySQL (`docker-compose.mysql.yaml`)
 
@@ -50,7 +51,50 @@ Coolify already runs Traefik (`coolify-proxy`) on port 443. Each Ghost blog need
 
 The config registers four routers (HTTP + HTTPS) with **priority 2000** so they win over each blog's default `Host(...)` router for paths under `/.ghost/stats` and `/.ghost/analytics`. Ghost itself is still routed by Coolify per deployment.
 
-### 4. Each blog (`docker-compose.yaml`)
+### 4. GhostHost API (`docker-compose.api.yaml`)
+
+Deploy once per server with custom name **`ghosthost-api`**. This small HTTP service lets [GhostHost](https://github.com/kaperkunde/GhostHost) automate blog deployments: when a customer provisions a new site, GhostHost calls the API to create that site's MySQL database and user on the shared MySQL stack.
+
+Set these environment variables on the Coolify resource:
+
+| Variable | Notes |
+| -------- | ----- |
+| `API_TOKEN` | Shared secret; GhostHost sends it as `Authorization: Bearer …` |
+| `MYSQL_HOST` | Shared MySQL hostname, e.g. `mysql-ghost-` |
+| `MYSQL_PORT` | Optional; defaults to `3306` |
+| `MYSQL_ROOT_PASSWORD` | Root password for the shared MySQL stack (falls back to `SERVICE_PASSWORD_MYSQLROOT`) |
+
+Keep the API on the internal Coolify network only — do not expose it on a public domain unless you add additional access controls.
+
+**Endpoint:** `POST /v1/provision/mysql-user`
+
+Request body (JSON):
+
+```json
+{
+  "username": "site_db_name",
+  "password": "generated-password"
+}
+```
+
+`username` must contain only letters, numbers, and underscores. The API creates a database with the same name, a MySQL user `username`@`%`, and grants full privileges on that database. The operation is idempotent.
+
+Success response:
+
+```json
+{
+  "ok": true,
+  "username": "site_db_name",
+  "database": "site_db_name",
+  "createdUser": true,
+  "updatedPassword": false,
+  "createdDatabase": true
+}
+```
+
+Use the returned `username` and `database` for `SERVICE_USER_MYSQL`, `GHOST_DATABASE`, and the supplied password for `SERVICE_PASSWORD_MYSQL` on the blog resource.
+
+### 5. Each blog (`docker-compose.yaml`)
 
 The blog stack is a single **Ghost** service. Assign the public domain to **ghost** (port **2368**) in Coolify.
 
@@ -70,7 +114,11 @@ Open `SERVICE_URL_GHOST` and finish setup at `/ghost`.
 
 ## MySQL: one database per blog
 
-Each blog needs its **own** MySQL database and user. Create them manually, or use [`scripts/createtable.sh`](scripts/createtable.sh) on the server:
+Each blog needs its **own** MySQL database and user.
+
+**Automated (GhostHost):** deploy the GhostHost API (step 4 above). GhostHost provisions credentials via `POST /v1/provision/mysql-user` when deploying a new blog.
+
+**Manual:** use [`scripts/createtable.sh`](scripts/createtable.sh) on the server:
 
 ```bash
 ./scripts/createtable.sh <mysql-container> <name> <password>
