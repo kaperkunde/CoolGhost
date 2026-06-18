@@ -1,0 +1,132 @@
+services:
+  mysql:
+    image: mysql:${MYSQL_VERSION:-8@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084}
+    restart: always
+    environment:
+      MYSQL_USER: ${SERVICE_USER_MYSQL}
+      MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL}
+      MYSQL_DATABASE: ${GHOST_DATABASE:-ghost}
+      MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
+    volumes:
+      - "mysql-data:/var/lib/mysql"
+    depends_on:
+      traffic-analytics:
+        condition: service_healthy
+      traffic-stats:
+        condition: service_healthy
+    healthcheck:
+      test: mysqladmin ping -p$$MYSQL_ROOT_PASSWORD -h 127.0.0.1
+      interval: 1s
+      start_period: 30s
+      start_interval: 5s
+      timeout: 20s
+      retries: 10
+
+  api:
+    build: ./api
+    restart: always
+    environment:
+      PORT: 3000
+      API_TOKEN: ${API_TOKEN:-${SERVICE_BASE64_TOKEN}}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'wget -q -O- http://127.0.0.1:3000/health | grep -q ''"mysql":true''',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  clickhouse:
+    build: ./clickhouse
+    restart: always
+    environment:
+      CLICKHOUSE_DB: shared_analytics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  traffic-stats:
+    build: ./traffic-stats
+    restart: always
+    environment:
+      PORT: 3000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DATABASE: shared_analytics
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- http://127.0.0.1:3000/v0/health | grep -q ok",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  traffic-analytics:
+    image: ghost/traffic-analytics:${TRAFFIC_ANALYTICS_VERSION:-1.0.244@sha256:98aba0319ef32634c1be41362a322343e71dc8ac6bd31b426a8e115ad14c3b8e}
+    platform: linux/amd64
+    restart: always
+    environment:
+      PROXY_TARGET: http://traffic-stats:3000/v0/events
+      TINYBIRD_WAIT: "true"
+      TRUST_PROXY: "true"
+    depends_on:
+      traffic-stats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/ | grep -q Ghost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  duplicati:
+    image: "lscr.io/linuxserver/duplicati:${DUPLICATI_VERSION:-v2.3.0.3_stable_2026-06-10-ls296@sha256:98986271265c9184f844d7e61ce63a60993d8dcfe5f989e4316b374ccebfdaee}"
+    restart: always
+    environment:
+      - SERVICE_URL_DUPLICATI_8200
+      - PUID=0
+      - PGID=0
+      - "TZ=${TZ:-Europe/Amsterdam}"
+      - "SETTINGS_ENCRYPTION_KEY=${SERVICE_PASSWORD_ENCRYPT}"
+      - "DUPLICATI__WEBSERVICE_PASSWORD=${SERVICE_PASSWORD_WEB}"
+    volumes:
+      - "/root/data/duplicati/config:/config"
+      - "/root/data/duplicati/backups:/backups"
+      - "/var/lib/docker/volumes:/local/volumes"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - "-f"
+        - "http://127.0.0.1:8200"
+      interval: 2s
+      timeout: 10s
+      retries: 15
+
+volumes:
+  mysql-data:
+  clickhouse-data:
