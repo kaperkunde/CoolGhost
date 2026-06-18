@@ -18,12 +18,13 @@ services:
       mail__from: ${MAIL_FROM}
       mail__options__auth__pass: ${MAIL_OPTIONS_AUTH_PASS}
       mail__options__auth__user: ${MAIL_OPTIONS_AUTH_USER}
-      mail__options__host: ${MAIL_OPTIONS_HOST}
+      mail__options__host: ${MAIL_OPTIONS_HOST:-smtp.mailgun.org}
       mail__options__port: ${MAIL_OPTIONS_PORT:-587}
       mail__options__secure: ${MAIL_OPTIONS_SECURE:-false}
+      mail__options__service: ${MAIL_OPTIONS_SERVICE:-Mailgun}
       bulk_email__mailgun__apiKey: ${BULK_EMAIL_MAILGUN_API_KEY}
       bulk_email__mailgun__domain: ${BULK_EMAIL_MAILGUN_DOMAIN}
-      bulk_email__mailgun__baseUrl: ${BULK_EMAIL_MAILGUN_BASE_URL}
+      bulk_email__mailgun__baseUrl: ${BULK_EMAIL_MAILGUN_BASE_URL:-https://api.mailgun.net/v3}
       security__staffDeviceVerification: ${STAFF_DEVICE_VERIFICATION:-true}
       analytics__enabled: "true"
       tinybird__tracker__endpoint: ${SERVICE_URL_GHOST}/.ghost/analytics/api/v1/page_hit
@@ -34,7 +35,7 @@ services:
       tinybird__stats__endpoint: ${SERVICE_URL_GHOST}/.ghost/stats
       tinybird__stats__endpointBrowser: ${SERVICE_URL_GHOST}/.ghost/stats
     volumes:
-      - 'ghost-content-data:/var/lib/ghost/content'
+      - "ghost-content-data:/var/lib/ghost/content"
     healthcheck:
       test:
         - "CMD-SHELL"
