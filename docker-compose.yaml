@@ -21,6 +21,9 @@ services:
       mail__options__host: ${MAIL_OPTIONS_HOST}
       mail__options__port: ${MAIL_OPTIONS_PORT:-587}
       mail__options__secure: ${MAIL_OPTIONS_SECURE:-false}
+      bulk_email__mailgun__apiKey: ${BULK_EMAIL_MAILGUN_API_KEY}
+      bulk_email__mailgun__domain: ${BULK_EMAIL_MAILGUN_DOMAIN}
+      bulk_email__mailgun__baseUrl: ${BULK_EMAIL_MAILGUN_BASE_URL}
       security__staffDeviceVerification: ${STAFF_DEVICE_VERIFICATION:-true}
       analytics__enabled: "true"
       tinybird__tracker__endpoint: ${SERVICE_URL_GHOST}/.ghost/analytics/api/v1/page_hit
