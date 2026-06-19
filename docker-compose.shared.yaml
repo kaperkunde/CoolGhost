@@ -104,7 +104,7 @@ services:
       start_period: 10s
 
   duplicati:
-    image: "lscr.io/linuxserver/duplicati:${DUPLICATI_VERSION:-v2.3.0.3_stable_2026-06-10-ls296@sha256:98986271265c9184f844d7e61ce63a60993d8dcfe5f989e4316b374ccebfdaee}"
+    build: ./duplicati
     restart: always
     environment:
       - SERVICE_URL_DUPLICATI_8200
@@ -113,10 +113,17 @@ services:
       - "TZ=${TZ:-Europe/Amsterdam}"
       - "SETTINGS_ENCRYPTION_KEY=${SERVICE_PASSWORD_ENCRYPT}"
       - "DUPLICATI__WEBSERVICE_PASSWORD=${SERVICE_PASSWORD_WEB}"
+      - "MYSQL_HOST=mysql"
+      - "MYSQL_PORT=3306"
+      - "MYSQL_ROOT_PASSWORD=${SERVICE_PASSWORD_MYSQLROOT}"
+    depends_on:
+      mysql:
+        condition: service_healthy
     volumes:
       - "/root/data/duplicati/config:/config"
       - "/root/data/duplicati/backups:/backups"
       - "/var/lib/docker/volumes:/local/volumes"
+      - "/root/data/db_dumps:/data/db_dumps"
     healthcheck:
       test:
         - CMD
