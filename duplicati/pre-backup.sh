@@ -17,9 +17,10 @@ if ! command -v mysqldump &>/dev/null; then
   exit 1
 fi
 
-# Fresh dump dir each run so Duplicati always sees a clean snapshot
-rm -rf "$DUMP_DIR"
+# Fresh dump dir each run so Duplicati always sees a clean snapshot.
+# /data/db_dumps is a bind mount so we can't rm the dir itself — clear contents only.
 mkdir -p "$DUMP_DIR"
+find "$DUMP_DIR" -mindepth 1 -delete
 
 MYSQL_ARGS=(-h "$MYSQL_HOST" -P "$MYSQL_PORT" -u root -p"$MYSQL_ROOT_PASSWORD")
 
