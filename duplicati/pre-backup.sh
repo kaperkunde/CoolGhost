@@ -12,10 +12,9 @@ if [[ -z "${MYSQL_ROOT_PASSWORD:-}" ]]; then
   exit 1
 fi
 
-# Install mysql-client if not present (Alpine-based Duplicati image)
 if ! command -v mysqldump &>/dev/null; then
-  echo "Installing mysql-client..."
-  apk add --no-cache mysql-client >/dev/null
+  echo "ERROR: mysqldump not found — is the image built correctly?" >&2
+  exit 1
 fi
 
 # Fresh dump dir each run so Duplicati always sees a clean snapshot
