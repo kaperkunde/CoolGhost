@@ -5,7 +5,7 @@ services:
     environment:
       MYSQL_USER: ${SERVICE_USER_MYSQL}
       MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL}
-      MYSQL_DATABASE: ${GHOST_DATABASE:-ghost}
+      MYSQL_DATABASE: ${GHOST_DATABASE:-plekje}
       MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
     volumes:
       - "mysql-data:/var/lib/mysql"
