@@ -120,10 +120,10 @@ services:
       mysql:
         condition: service_healthy
     volumes:
-      - "/root/data/duplicati/config:/config"
-      - "/root/data/duplicati/backups:/backups"
+      - "/root/data/dev/duplicati/config:/config"
+      - "/root/data/dev/duplicati/backups:/backups"
       - "/var/lib/docker/volumes:/local/volumes"
-      - "/root/data/db_dumps:/data/db_dumps"
+      - "/root/data/dev/db_dumps:/data/db_dumps"
     healthcheck:
       test:
         - CMD
