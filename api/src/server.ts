@@ -2,6 +2,7 @@ import express from "express"
 
 import { config } from "./config.js"
 import { checkMysqlConnectivity, formatMysqlError } from "./lib/mysql-connectivity.js"
+import { databasesRouter } from "./routes/databases.js"
 import { provisionRouter } from "./routes/provision.js"
 
 const JSON_BODY_LIMIT = "1kb"
@@ -38,6 +39,7 @@ app.get("/health", async (_req, res) => {
 })
 
 app.use("/v1/provision", provisionRouter)
+app.use("/v1/databases", databasesRouter)
 
 app.listen(config.port, config.host, () => {
   console.info(`ghosthost-api listening on ${config.host}:${config.port}`)
