@@ -6,7 +6,7 @@ services:
     environment:
       MYSQL_USER: ${MYSQL_USER:-plekje}
       MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL}
-      MYSQL_DATABASE: ${GHOST_DATABASE:-plekje}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-plekje}
       MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
     volumes:
       - "mysql-data:/var/lib/mysql"
@@ -126,6 +126,7 @@ services:
       - "/root/data/dev/duplicati/backups:/backups"
       - "/var/lib/docker/volumes:/local/volumes"
       - "/root/data/dev/db_dumps:/data/db_dumps"
+      - "/data/coolify:/data/coolify:ro"
     healthcheck:
       test:
         - CMD
