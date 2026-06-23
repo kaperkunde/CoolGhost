@@ -2,6 +2,7 @@ services:
   mysql:
     image: mysql:${MYSQL_VERSION:-8@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084}
     restart: always
+    command: --default-authentication-plugin=mysql_native_password
     environment:
       MYSQL_USER: ${SERVICE_USER_MYSQL}
       MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL}
