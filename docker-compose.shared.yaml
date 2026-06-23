@@ -27,6 +27,7 @@ services:
     restart: always
     environment:
       PORT: 3000
+      SERVICE_URL_API_3000: ${SERVICE_URL_API_3000}
       API_TOKEN: ${API_TOKEN:-${SERVICE_BASE64_TOKEN}}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -107,12 +108,12 @@ services:
     build: ./duplicati
     restart: always
     environment:
-      - SERVICE_URL_DUPLICATI_8200
+      - SERVICE_URL_DUPLICATI_8200=${SERVICE_URL_DUPLICATI_8200}
       - PUID=0
       - PGID=0
       - "TZ=${TZ:-Europe/Amsterdam}"
       - "SETTINGS_ENCRYPTION_KEY=${SERVICE_PASSWORD_ENCRYPT}"
-      - "DUPLICATI__WEBSERVICE_PASSWORD=${SERVICE_PASSWORD_WEB}"
+      - "DUPLICATI__WEBSERVICE_PASSWORD=${SERVICE_PASSWORD_DUPLICATI}"
       - "MYSQL_HOST=mysql"
       - "MYSQL_PORT=3306"
       - "MYSQL_ROOT_PASSWORD=${SERVICE_PASSWORD_MYSQLROOT}"
