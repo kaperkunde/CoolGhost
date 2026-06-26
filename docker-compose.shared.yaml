@@ -51,7 +51,7 @@ services:
     build: ./clickhouse
     restart: always
     environment:
-      CLICKHOUSE_DB: shared_analytics
+      CLICKHOUSE_DB: ghost_analytics
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse-data:/var/lib/clickhouse
@@ -72,7 +72,7 @@ services:
     environment:
       PORT: 3000
       CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_DATABASE: shared_analytics
+      CLICKHOUSE_DATABASE: ghost_analytics
     depends_on:
       clickhouse:
         condition: service_healthy
