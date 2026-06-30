@@ -24,7 +24,7 @@ services:
       mail__options__service: ${MAIL_OPTIONS_SERVICE:-Mailgun}
       bulkEmail__mailgun__apiKey: ${BULK_EMAIL_MAILGUN_API_KEY}
       bulkEmail__mailgun__domain: ${BULK_EMAIL_MAILGUN_DOMAIN}
-      bulkEmail__mailgun__baseUrl: ${BULK_EMAIL_MAILGUN_BASE_URL:-https://api.mailgun.net/v3}
+      bulkEmail__mailgun__baseUrl: ${BULK_EMAIL_MAILGUN_BASE_URL:-https://api.mailgun.net}
       security__staffDeviceVerification: ${STAFF_DEVICE_VERIFICATION:-true}
       analytics__enabled: "true"
       tinybird__tracker__endpoint: ${SERVICE_URL_GHOST}/.ghost/analytics/api/v1/page_hit
