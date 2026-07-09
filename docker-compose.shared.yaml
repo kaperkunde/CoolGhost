@@ -33,6 +33,15 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
+      # Export/restore support: shared staging mount + docker volumes access.
+      STAGING_DIR: /staging
+      VOLUMES_DIR: /local/volumes
+      DUPLICATI_URL: http://duplicati:8200
+      DUPLICATI_PASSWORD: ${SERVICE_PASSWORD_DUPLICATI}
+      DUPLICATI_STAGING_DIR: /staging
+    volumes:
+      - "/var/lib/docker/volumes:/local/volumes"
+      - "/root/data/dev/ghosthost-staging:/staging"
     depends_on:
       mysql:
         condition: service_healthy
@@ -127,6 +136,8 @@ services:
       - "/var/lib/docker/volumes:/local/volumes"
       - "/root/data/dev/db_dumps:/data/db_dumps"
       - "/data/coolify:/data/coolify:ro"
+      # Shared staging mount — restore target for export/restore jobs run by the api service.
+      - "/root/data/dev/ghosthost-staging:/staging"
     healthcheck:
       test:
         - CMD

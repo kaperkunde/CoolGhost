@@ -1,0 +1,228 @@
+import { Router } from "express"
+
+import { config } from "../config.js"
+import {
+  activeJobForSpot,
+  getDataJob,
+  JobConflictError,
+  startDataJob,
+  type DataJob,
+} from "../lib/data-jobs.js"
+import {
+  DuplicatiError,
+  duplicatiConfigured,
+  listDuplicatiBackups,
+  listDuplicatiFilesets,
+} from "../lib/duplicati.js"
+import { runExportJob, type ExportSource } from "../lib/export-job.js"
+import { runRestoreJob, type RestoreSource } from "../lib/restore-job.js"
+import {
+  assertSafeDatabaseName,
+  assertSafeName,
+  StagingUnavailableError,
+} from "../lib/staging.js"
+import { requireApiToken } from "../middleware/auth.js"
+
+export const dataRouter = Router()
+
+dataRouter.use(requireApiToken)
+
+function jobResponse(job: DataJob) {
+  return {
+    id: job.id,
+    kind: job.kind,
+    spotId: job.spotId,
+    phase: job.phase,
+    mutationStarted: job.mutationStarted,
+    warnings: job.warnings,
+    error: job.error,
+    artifact: job.artifact,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  }
+}
+
+function handleError(res: import("express").Response, error: unknown): void {
+  if (error instanceof StagingUnavailableError) {
+    res.status(503).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof JobConflictError) {
+    res.status(409).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof DuplicatiError) {
+    res.status(502).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof Error && error.message.startsWith("Invalid ")) {
+    res.status(400).json({ error: error.message })
+    return
+  }
+
+  console.error("Data route failed", { error })
+  res.status(500).json({ error: "Internal error" })
+}
+
+type SpotDataBody = {
+  database?: unknown
+  applicationUuid?: unknown
+  source?: Record<string, unknown> | null
+}
+
+function parseTarget(spotIdParam: string, body: SpotDataBody) {
+  return {
+    spotId: assertSafeName(spotIdParam, "spot id"),
+    database: assertSafeDatabaseName(String(body.database ?? "")),
+    applicationUuid: assertSafeName(
+      String(body.applicationUuid ?? ""),
+      "application uuid",
+    ),
+  }
+}
+
+function requireString(
+  value: unknown,
+  label: string,
+): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Invalid ${label}`)
+  }
+
+  return value.trim()
+}
+
+/** List Duplicati backup jobs with their restorable versions. */
+dataRouter.get("/backups", async (_req, res) => {
+  if (!duplicatiConfigured()) {
+    res.json({ ok: true, configured: false, backups: [] })
+    return
+  }
+
+  try {
+    const backups = await listDuplicatiBackups()
+
+    const withVersions = await Promise.all(
+      backups.map(async (backup) => ({
+        ...backup,
+        versions: await listDuplicatiFilesets(backup.id).catch((error) => {
+          console.error("Failed to list Duplicati filesets", {
+            backupId: backup.id,
+            error,
+          })
+          return []
+        }),
+      })),
+    )
+
+    res.json({ ok: true, configured: true, backups: withVersions })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+dataRouter.post("/spots/:spotId/export", async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as SpotDataBody
+    const target = parseTarget(String(req.params["spotId"]), body)
+    const rawSource = body.source ?? { type: "current" }
+
+    let source: ExportSource
+
+    if (rawSource["type"] === "backup") {
+      source = {
+        type: "backup",
+        backupId: requireString(rawSource["backupId"], "backup id"),
+        backupName:
+          typeof rawSource["backupName"] === "string"
+            ? rawSource["backupName"]
+            : "backup",
+        versionTime: requireString(rawSource["versionTime"], "version time"),
+      }
+    } else {
+      source = { type: "current" }
+    }
+
+    const job = await startDataJob({
+      kind: "export",
+      spotId: target.spotId,
+      worker: (handle) => runExportJob({ handle, target, source }),
+    })
+
+    res.status(202).json({ ok: true, job: jobResponse(job) })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+dataRouter.post("/spots/:spotId/restore", async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as SpotDataBody
+    const target = parseTarget(String(req.params["spotId"]), body)
+    const rawSource = body.source ?? {}
+
+    let source: RestoreSource
+
+    if (rawSource["type"] === "upload") {
+      source = {
+        type: "upload",
+        uploadRelPath: requireString(rawSource["uploadRelPath"], "upload path"),
+      }
+    } else if (rawSource["type"] === "backup") {
+      source = {
+        type: "backup",
+        backupId: requireString(rawSource["backupId"], "backup id"),
+        versionTime: requireString(rawSource["versionTime"], "version time"),
+      }
+    } else if (rawSource["type"] === "artifact") {
+      source = { type: "artifact" }
+    } else {
+      res.status(400).json({ error: "Invalid restore source" })
+      return
+    }
+
+    const job = await startDataJob({
+      kind: "restore",
+      spotId: target.spotId,
+      worker: (handle) => runRestoreJob({ handle, target, source }),
+    })
+
+    res.status(202).json({ ok: true, job: jobResponse(job) })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+dataRouter.get("/jobs/:jobId", (req, res) => {
+  const job = getDataJob(String(req.params["jobId"]))
+
+  if (!job) {
+    res.status(404).json({ error: "Job not found" })
+    return
+  }
+
+  res.json({ ok: true, job: jobResponse(job) })
+})
+
+dataRouter.get("/spots/:spotId/active-job", (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const job = activeJobForSpot(spotId)
+
+    res.json({ ok: true, job: job ? jobResponse(job) : null })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/** Whether this server has the staging mount + duplicati configured. */
+dataRouter.get("/capabilities", (_req, res) => {
+  res.json({
+    ok: true,
+    staging: Boolean(config.stagingDir),
+    duplicati: duplicatiConfigured(),
+  })
+})

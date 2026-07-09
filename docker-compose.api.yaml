@@ -9,6 +9,17 @@ services:
       MYSQL_HOST: ${MYSQL_HOST:?Set MYSQL_HOST to the shared MySQL hostname, e.g. mysql-ghost-}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${SERVICE_PASSWORD_MYSQLROOT}}
+      # Export/restore support (optional). Leave DUPLICATI_URL unset when no
+      # duplicati stack is reachable — backup-sourced export/restore then 503s
+      # while current-data export keeps working via the volume mounts below.
+      STAGING_DIR: /staging
+      VOLUMES_DIR: /local/volumes
+      DUPLICATI_URL: ${DUPLICATI_URL:-}
+      DUPLICATI_PASSWORD: ${DUPLICATI_PASSWORD:-}
+      DUPLICATI_STAGING_DIR: ${DUPLICATI_STAGING_DIR:-/staging}
+    volumes:
+      - "/var/lib/docker/volumes:/local/volumes"
+      - "${STAGING_HOST_DIR:-/root/data/ghosthost-staging}:/staging"
     healthcheck:
       test:
         [

@@ -96,6 +96,45 @@ Success response:
 
 Use the returned `username` and `database` for `SERVICE_USER_MYSQL`, `GHOST_DATABASE`, and the supplied password for `SERVICE_PASSWORD_MYSQL` on the blog resource.
 
+#### Export / restore (`/v1/data/*`)
+
+The API also executes blog exports and restores on behalf of GhostHost. This
+requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
+`docker-compose.api.yaml` carries the same wiring with overridable defaults):
+
+| Variable / mount                      | Notes                                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `/var/lib/docker/volumes:/local/volumes` | Read/write access to each blog's `ghost-content-data` volume                             |
+| shared staging dir at `/staging`      | Same host dir must be mounted into duplicati and the GhostHost app (`GHOSTHOST_STAGING_DIR`) |
+| `STAGING_DIR`                         | In-container staging path (`/staging`)                                                      |
+| `DUPLICATI_URL` / `DUPLICATI_PASSWORD` | Duplicati web service (e.g. `http://duplicati:8200`) + `SERVICE_PASSWORD_DUPLICATI`        |
+| `DUPLICATI_STAGING_DIR`               | Staging path as seen inside the duplicati container (defaults to `STAGING_DIR`)             |
+| `ARTIFACT_TTL_HOURS`                  | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)           |
+| `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                          |
+
+Endpoints (all require the bearer token): `GET /v1/data/backups` lists
+Duplicati jobs and their restorable versions; `POST /v1/data/spots/:spot/export`
+and `POST /v1/data/spots/:spot/restore` start async jobs polled via
+`GET /v1/data/jobs/:id`. Exports package `info.json` + `db.sql` + `content/`
+into one `.tar.gz` under `staging/artifacts/`; restores expect the caller to
+stop the Ghost container first, snapshot current data as an undo artifact,
+then replace the content volume and re-import the database. When `STAGING_DIR`
+or the Duplicati env is missing the routes degrade gracefully (503 / empty
+list) instead of failing at boot.
+
+Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
+/api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote
+target credentials, so local and remote versions restore identically. Verify
+against your Duplicati version on first deploy — the endpoint shapes differ
+across releases.
+
+**Duplicati job requirements** (configured in the Duplicati web UI): every
+backup job that should be user-restorable must include `/local/volumes` and
+`/data/db_dumps` in its sources and run
+`--run-script-before=/usr/local/bin/pre-backup.sh` so a fresh SQL dump of every
+site database is captured alongside the volume files. The stock setup uses two
+jobs: hourly to local disk (`/backups`) and daily to remote storage.
+
 ### 5. Each blog (`docker-compose.yaml`)
 
 The blog stack is a single **Ghost** service. Assign the public domain to **ghost** (port **2368**) in Coolify.

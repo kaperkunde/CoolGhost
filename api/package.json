@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "express": "^5.1.0",
-    "mysql2": "^3.14.1"
+    "mysql2": "^3.14.1",
+    "tar": "^7.4.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.2",
