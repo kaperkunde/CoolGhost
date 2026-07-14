@@ -11,17 +11,14 @@ import {
 import {
   DuplicatiError,
   duplicatiConfigured,
-  duplicatiVersionContainsPath,
   listDuplicatiBackups,
   listDuplicatiFilesets,
-  type DuplicatiFileset,
 } from "../lib/duplicati.js"
 import { runExportJob, type ExportSource } from "../lib/export-job.js"
 import { runRestoreJob, type RestoreSource } from "../lib/restore-job.js"
 import {
   assertSafeDatabaseName,
   assertSafeName,
-  ghostContentVolumeBackupPath,
   StagingUnavailableError,
 } from "../lib/staging.js"
 import { requireApiToken } from "../middleware/auth.js"
@@ -98,94 +95,27 @@ function requireString(
   return value.trim()
 }
 
-/**
- * Restrict a backup job's filesets to the versions that actually hold this
- * site's data. Each check is a real (~1-2s) call to Duplicati, and a backup
- * job can carry many hourly versions, so checking every version individually
- * doesn't scale — one real run against 12 versions took ~40s.
- *
- * Instead this binary-searches the boundary: versions are newest-first, and
- * in normal operation a site's data is present continuously from the moment
- * it was first deployed onward, so "has data" is monotonic across the list
- * (newest versions have it, versions before first deploy don't). That lets
- * O(log n) checks stand in for O(n). If a site's data flickers in and out
- * (e.g. briefly moved to another server and back), a handful of versions
- * near the boundary could be mis-classified — the export step still
- * re-validates before doing real work, so this is a safe trade-off.
- */
-async function filterVersionsForSpot(
-  backupId: string,
-  versions: DuplicatiFileset[],
-  volumeBackupPath: string,
-): Promise<DuplicatiFileset[]> {
-  if (versions.length === 0) {
-    return []
-  }
-
-  const hasSpotData = (version: DuplicatiFileset) =>
-    duplicatiVersionContainsPath({
-      backupId,
-      time: version.time,
-      pathPrefix: volumeBackupPath,
-    }).catch(() => false)
-
-  if (!(await hasSpotData(versions[0]!))) {
-    return []
-  }
-
-  let newestWithout = versions.length - 1
-
-  if (await hasSpotData(versions[newestWithout]!)) {
-    return versions
-  }
-
-  let newestWith = 0
-
-  while (newestWithout - newestWith > 1) {
-    const mid = Math.floor((newestWith + newestWithout) / 2)
-
-    if (await hasSpotData(versions[mid]!)) {
-      newestWith = mid
-    } else {
-      newestWithout = mid
-    }
-  }
-
-  return versions.slice(0, newestWith + 1)
-}
-
-/** List Duplicati backup jobs with the versions that contain this site's data. */
-dataRouter.get("/spots/:spotId/backups", async (req, res) => {
+/** List Duplicati backup jobs with their restorable versions. */
+dataRouter.get("/backups", async (_req, res) => {
   if (!duplicatiConfigured()) {
     res.json({ ok: true, configured: false, backups: [] })
     return
   }
 
   try {
-    const target = parseTarget(String(req.params["spotId"]), req.query)
-    const volumeBackupPath = ghostContentVolumeBackupPath(target.applicationUuid)
-
     const backups = await listDuplicatiBackups()
 
     const withVersions = await Promise.all(
-      backups.map(async (backup) => {
-        const versions = await listDuplicatiFilesets(backup.id).catch((error) => {
+      backups.map(async (backup) => ({
+        ...backup,
+        versions: await listDuplicatiFilesets(backup.id).catch((error) => {
           console.error("Failed to list Duplicati filesets", {
             backupId: backup.id,
             error,
           })
           return []
-        })
-
-        return {
-          ...backup,
-          versions: await filterVersionsForSpot(
-            backup.id,
-            versions,
-            volumeBackupPath,
-          ),
-        }
-      }),
+        }),
+      })),
     )
 
     res.json({ ok: true, configured: true, backups: withVersions })

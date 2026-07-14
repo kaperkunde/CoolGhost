@@ -206,12 +206,6 @@ export async function listDuplicatiFilesets(
 /**
  * Check whether a fileset version contains any files under the given path
  * prefix (as recorded at backup time, e.g. /local/volumes/<vol>/_data/).
- *
- * The path to search is a query parameter ("filter"), not a URL path segment
- * — Duplicati's REST API exposes a single "/backup/{id}/files" endpoint and
- * matches against "filter" server-side. "prefix-only" skips enumerating the
- * matched folder's contents, which is what makes this a cheap existence
- * check rather than a full (and, for large backups, slow) directory listing.
  */
 export async function duplicatiVersionContainsPath({
   backupId,
@@ -223,14 +217,15 @@ export async function duplicatiVersionContainsPath({
   pathPrefix: string
 }): Promise<boolean> {
   const query = new URLSearchParams({
-    filter: pathPrefix,
     time,
-    "prefix-only": "true",
-    "folder-contents": "false",
+    "prefix-only": "false",
+    "folder-contents": "true",
   })
 
   const payload = await duplicatiFetch<{ Files?: unknown[] }>(
-    `/api/v1/backup/${encodeURIComponent(backupId)}/files?${query.toString()}`,
+    `/api/v1/backup/${encodeURIComponent(backupId)}/files/${encodeURIComponent(
+      pathPrefix,
+    )}?${query.toString()}`,
   )
 
   return Array.isArray(payload.Files) && payload.Files.length > 0
@@ -314,11 +309,9 @@ const RESTORE_POLL_INTERVAL_MS = 2000
 export async function waitForDuplicatiTask({
   taskId,
   timeoutMs,
-  operation = "restore",
 }: {
   taskId: number
   timeoutMs: number
-  operation?: string
 }): Promise<void> {
   const deadline = Date.now() + timeoutMs
 
@@ -332,8 +325,8 @@ export async function waitForDuplicatiTask({
     if (task.status === "failed") {
       throw new DuplicatiError(
         task.errorMessage
-          ? `Duplicati ${operation} failed: ${task.errorMessage}`
-          : `Duplicati ${operation} failed`,
+          ? `Duplicati restore failed: ${task.errorMessage}`
+          : "Duplicati restore failed",
       )
     }
 
@@ -347,80 +340,4 @@ export async function waitForDuplicatiTask({
       setTimeout(resolve, RESTORE_POLL_INTERVAL_MS),
     )
   }
-}
-
-/**
- * True when a Duplicati failure is the well-known "local database is out of
- * sync with the destination" state — e.g. an interrupted upload or something
- * external removing files Duplicati still expects. Duplicati's own error
- * message points at the fix ("please run repair"); this lets callers detect
- * it and self-heal instead of surfacing a dead end to the user.
- */
-export function isDuplicatiMissingRemoteFilesError(
-  message: string | null | undefined,
-): boolean {
-  if (!message) {
-    return false
-  }
-
-  const lower = message.toLowerCase()
-
-  return (
-    lower.includes("missing from the remote storage") ||
-    lower.includes("please run repair")
-  )
-}
-
-/**
- * True when repair itself refused to proceed because actual data blocks
- * (dblock files — the backed-up content, not just index/metadata) are gone,
- * not just bookkeeping drift. Duplicati deliberately won't discard index
- * entries for real data loss without an explicit "purge-broken-files" (or
- * "rebuild-missing-dblock-files") call, since that permanently drops the
- * affected files from history. That's a judgment call best left to whoever
- * runs Duplicati's own UI (which can resolve the destination + credentials
- * safely) rather than something to auto-run blind — see comment at the call
- * site in duplicati-staging.ts.
- */
-export function isDuplicatiMissingDataBlocksError(
-  message: string | null | undefined,
-): boolean {
-  if (!message) {
-    return false
-  }
-
-  const lower = message.toLowerCase()
-
-  return (
-    lower.includes("missing data files") &&
-    (lower.includes("purge-broken-files") ||
-      lower.includes("rebuild-missing-dblock-files"))
-  )
-}
-
-/**
- * Reconcile Duplicati's local database with what's actually in the backup
- * destination. This is Duplicati's own documented recovery for
- * "MissingRemoteFiles" errors: it drops bookkeeping for the confirmed-gone
- * files so future backups/restores work again. Any historical fileset that
- * depended solely on those specific blocks may lose the affected files, but
- * the backup chain itself recovers.
- */
-export async function repairDuplicatiBackup(backupId: string): Promise<void> {
-  const payload = await duplicatiFetch<{ TaskID?: number; ID?: number }>(
-    `/api/v1/backup/${encodeURIComponent(backupId)}/repair`,
-    { method: "POST", body: JSON.stringify({}) },
-  )
-
-  const taskId = payload.TaskID ?? payload.ID
-
-  if (taskId == null) {
-    throw new DuplicatiError("Duplicati repair returned no task id")
-  }
-
-  await waitForDuplicatiTask({
-    taskId: Number(taskId),
-    timeoutMs: config.duplicatiRestoreTimeoutMinutes * 60 * 1000,
-    operation: "repair",
-  })
 }

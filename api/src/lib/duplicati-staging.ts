@@ -4,9 +4,6 @@ import path from "path"
 import { config } from "../config.js"
 import {
   duplicatiVersionContainsPath,
-  isDuplicatiMissingDataBlocksError,
-  isDuplicatiMissingRemoteFilesError,
-  repairDuplicatiBackup,
   startDuplicatiRestore,
   waitForDuplicatiTask,
 } from "./duplicati.js"
@@ -102,71 +99,17 @@ export async function stageDuplicatiVersion({
 
   await fs.mkdir(targetDir, { recursive: true })
 
-  const runRestore = async () => {
-    const taskId = await startDuplicatiRestore({
-      backupId,
-      time: versionTime,
-      paths: [volumeBackupPath, dumpBackupPath],
-      targetPath: duplicatiPathFor(targetDir),
-    })
+  const taskId = await startDuplicatiRestore({
+    backupId,
+    time: versionTime,
+    paths: [volumeBackupPath, dumpBackupPath],
+    targetPath: duplicatiPathFor(targetDir),
+  })
 
-    await waitForDuplicatiTask({
-      taskId,
-      timeoutMs: config.duplicatiRestoreTimeoutMinutes * 60 * 1000,
-    })
-  }
-
-  try {
-    await runRestore()
-  } catch (error) {
-    // Duplicati's local database can drift out of sync with the backup
-    // destination (interrupted upload, something external touching the
-    // destination, ...) — its own error message points at "repair" as the
-    // fix. Run it automatically and retry once instead of dead-ending the
-    // export/restore on something the site owner can't act on.
-    if (
-      !(
-        error instanceof Error &&
-        isDuplicatiMissingRemoteFilesError(error.message)
-      )
-    ) {
-      throw error
-    }
-
-    console.warn(
-      "Duplicati reported missing remote files; running repair and retrying",
-      { backupId, versionTime, error: error.message },
-    )
-
-    try {
-      await repairDuplicatiBackup(backupId)
-    } catch (repairError) {
-      // Repair refused because actual data (not just bookkeeping) is gone.
-      // Discarding those index entries is a real, permanent loss call — not
-      // something to make silently on the backend. Surface a clear, non-
-      // technical message to the site owner and leave the operator-facing
-      // detail (which files, that "purge-broken-files" is the fix) in the
-      // server log for whoever runs Duplicati's own UI to act on safely
-      // (it can resolve the destination + credentials; we'd be guessing).
-      if (
-        repairError instanceof Error &&
-        isDuplicatiMissingDataBlocksError(repairError.message)
-      ) {
-        console.error(
-          "Duplicati backup has permanently missing data blocks; needs a manual purge-broken-files run",
-          { backupId, versionTime, error: repairError.message },
-        )
-
-        throw new Error(
-          "This backup version can no longer be restored — part of its data is permanently missing from storage. Try a different version, or contact support if this keeps happening.",
-        )
-      }
-
-      throw repairError
-    }
-
-    await runRestore()
-  }
+  await waitForDuplicatiTask({
+    taskId,
+    timeoutMs: config.duplicatiRestoreTimeoutMinutes * 60 * 1000,
+  })
 
   // Duplicati strips the largest common prefix when restoring to a new
   // location, so the exact layout under targetDir varies — locate the
