@@ -27,18 +27,18 @@ services:
     build: ./api
     restart: always
     environment:
-      PORT: 3000
-      SERVICE_URL_API_3000: ${SERVICE_URL_API_3000}
-      API_TOKEN: ${API_TOKEN:-${SERVICE_BASE64_TOKEN}}
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT}
-      # Export/restore support: shared staging mount + docker volumes access.
-      STAGING_DIR: /staging
-      VOLUMES_DIR: /local/volumes
-      DUPLICATI_URL: http://duplicati:8200
-      DUPLICATI_PASSWORD: ${SERVICE_PASSWORD_DUPLICATI}
-      DUPLICATI_STAGING_DIR: /staging
+      - PORT=3000
+      - SERVICE_URL_API
+      - SERVICE_URL_API_3000=${SERVICE_URL_API}
+      - API_TOKEN=${API_TOKEN:-${SERVICE_BASE64_TOKEN}}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_ROOT_PASSWORD=${SERVICE_PASSWORD_MYSQLROOT}
+      - STAGING_DIR=/staging
+      - VOLUMES_DIR=/local/volumes
+      - DUPLICATI_URL=http://duplicati:8200
+      - DUPLICATI_PASSWORD=${SERVICE_PASSWORD_DUPLICATI}
+      - DUPLICATI_STAGING_DIR=/staging
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
       - "/root/data/dev/ghosthost-staging:/staging"
@@ -118,6 +118,7 @@ services:
     build: ./duplicati
     restart: always
     environment:
+      - SERVICE_URL_DUPLICATI
       - SERVICE_URL_DUPLICATI_8200=${SERVICE_URL_DUPLICATI_8200}
       - PUID=0
       - PGID=0
