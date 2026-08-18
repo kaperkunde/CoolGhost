@@ -206,6 +206,12 @@ export async function listDuplicatiFilesets(
 /**
  * Check whether a fileset version contains any files under the given path
  * prefix (as recorded at backup time, e.g. /local/volumes/<vol>/_data/).
+ *
+ * The path to search is a query parameter ("filter"), not a URL path segment
+ * — Duplicati's REST API exposes a single "/backup/{id}/files" endpoint and
+ * matches against "filter" server-side. "prefix-only" skips enumerating the
+ * matched folder's contents, which is what makes this a cheap existence
+ * check rather than a full (and, for large backups, slow) directory listing.
  */
 export async function duplicatiVersionContainsPath({
   backupId,
@@ -217,15 +223,14 @@ export async function duplicatiVersionContainsPath({
   pathPrefix: string
 }): Promise<boolean> {
   const query = new URLSearchParams({
+    filter: pathPrefix,
     time,
-    "prefix-only": "false",
-    "folder-contents": "true",
+    "prefix-only": "true",
+    "folder-contents": "false",
   })
 
   const payload = await duplicatiFetch<{ Files?: unknown[] }>(
-    `/api/v1/backup/${encodeURIComponent(backupId)}/files/${encodeURIComponent(
-      pathPrefix,
-    )}?${query.toString()}`,
+    `/api/v1/backup/${encodeURIComponent(backupId)}/files?${query.toString()}`,
   )
 
   return Array.isArray(payload.Files) && payload.Files.length > 0
