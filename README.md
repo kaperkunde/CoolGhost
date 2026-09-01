@@ -128,12 +128,66 @@ target credentials, so local and remote versions restore identically. Verify
 against your Duplicati version on first deploy — the endpoint shapes differ
 across releases.
 
-**Duplicati job requirements** (configured in the Duplicati web UI): every
-backup job that should be user-restorable must include `/local/volumes` and
-`/data/db_dumps` in its sources and run
-`--run-script-before=/usr/local/bin/pre-backup.sh` so a fresh SQL dump of every
-site database is captured alongside the volume files. The stock setup uses two
-jobs: hourly to local disk (`/backups`) and daily to remote storage.
+#### Duplicati backup jobs (configured automatically)
+
+The `duplicati` image builds from `./duplicati` and provisions its own backup
+jobs the first time it starts, so a fresh Coolify deploy comes up ready for the
+API's backup, export and restore flows with nothing to click:
+
+| Job                | Schedule           | Retention | Destination            | Sources                                            |
+| ------------------ | ------------------ | --------- | ---------------------- | -------------------------------------------------- |
+| `CoolGhost Hourly` | every hour         | 24 hours  | `file:///backups/hourly` | `/local/volumes/`, `/data/db_dumps/`             |
+| `CoolGhost Daily`  | daily at 03:30     | 15 days   | `file:///backups/daily`  | the above plus `/data/coolify/`                  |
+
+Both run `--run-script-before=/usr/local/bin/pre-backup.sh`, so every snapshot
+contains a fresh `gzip`ped `mysqldump` of each site database taken alongside the
+content volumes — which is exactly the pair (`/local/volumes/<uuid>_ghost-content-data/_data/`
+and `/data/db_dumps/<database>.sql.gz`) that `GET /v1/data/backups` indexes and
+that the restore flow pulls back out of a chosen version. Live MySQL and
+ClickHouse data directories are excluded: a file-level copy of a running
+database is not restorable, and the dumps carry that content properly.
+
+The hourly job is also kicked off once at the end of provisioning, so there is a
+restorable version immediately instead of an empty picker for the first hour.
+
+Provisioning is idempotent. It records a marker at
+`/config/coolghost-bootstrap.json` and skips any job whose name already exists,
+so restarts and redeploys never duplicate jobs and jobs you have since edited or
+deleted are left alone. To re-run it, delete that marker (or set
+`DUPLICATI_BOOTSTRAP_FORCE=true`); progress and errors go to `docker logs` and to
+`/config/coolghost-bootstrap.log`.
+
+> **Keep `DUPLICATI_BACKUP_PASSPHRASE` safe.** Backups are AES-encrypted with it
+> and cannot be restored without it — not on this host, not on a rebuilt one. It
+> defaults to `SERVICE_PASSWORD_ENCRYPT`, which Coolify generates and persists in
+> the stack's environment; copy it somewhere off the server. Changing it later
+> makes existing backups unreadable.
+
+Local disk alone does not survive losing the server, so point the daily job at
+off-host storage by setting `DUPLICATI_DAILY_TARGET_URL` to any Duplicati backend
+URL (S3, B2, SFTP, ...) before the first deploy. Duplicati holds those
+credentials, so remote versions restore through the API exactly like local ones.
+
+Overridable environment (all optional):
+
+| Variable                                              | Default                            | Notes                                                     |
+| ----------------------------------------------------- | ---------------------------------- | --------------------------------------------------------- |
+| `DUPLICATI_BOOTSTRAP_ENABLED`                         | `true`                             | `false` to configure jobs by hand in the web UI instead    |
+| `DUPLICATI_BACKUP_PASSPHRASE`                         | `SERVICE_PASSWORD_ENCRYPT`         | Encryption passphrase; empty creates unencrypted backups   |
+| `DUPLICATI_DAILY_TARGET_URL`                          | `file:///backups/daily`            | Any Duplicati backend URL — set this for off-host copies   |
+| `DUPLICATI_HOURLY_TARGET_URL`                         | `file:///backups/hourly`           |                                                            |
+| `DUPLICATI_DAILY_AT`                                  | `03:30`                            | Wall-clock time in the container `TZ`                      |
+| `DUPLICATI_HOURLY_KEEP_TIME` / `DUPLICATI_DAILY_KEEP_TIME` | `24h` / `15D`                 | Duplicati timespans (`h` hours, `D` days — `m` is minutes) |
+| `DUPLICATI_HOURLY_REPEAT` / `DUPLICATI_DAILY_REPEAT`  | `1h` / `1D`                        | Must be longer than 5 minutes                              |
+| `DUPLICATI_HOURLY_SOURCES` / `DUPLICATI_DAILY_SOURCES` | see table above                   | Colon-separated absolute paths inside the container        |
+| `DUPLICATI_BOOTSTRAP_EXCLUDES`                        | live DB dirs, `backingFsBlockDev`  | Colon-separated Duplicati filter expressions               |
+| `DUPLICATI_BOOTSTRAP_RUN_NOW`                         | `true`                             | `false` to skip the initial hourly run                     |
+| `DUPLICATI_HOURLY_NAME` / `DUPLICATI_DAILY_NAME`      | `CoolGhost Hourly` / `... Daily`   | Names are what the bootstrap matches on                    |
+
+If you configure jobs by hand instead, keep the same contract: include
+`/local/volumes` and `/data/db_dumps` in the sources and run
+`--run-script-before=/usr/local/bin/pre-backup.sh`, or the API will not find the
+data it needs to restore a site.
 
 ### 5. Each blog (`docker-compose.yaml`)
 
