@@ -47,9 +47,19 @@ DAILY_SOURCES="${DUPLICATI_DAILY_SOURCES:-/local/volumes/:/data/db_dumps/:/data/
 # Excluded from both jobs. /local/volumes is the host's whole docker volume
 # root, so it also holds live database files: those are huge, and a file-level
 # copy of a running database is not restorable anyway. The real database
-# content arrives as consistent dumps via pre-backup.sh instead.
+# content arrives as consistent dumps via pre-backup.sh instead. Both dash and
+# underscore spellings are matched — Coolify volume names use dashes
+# (…_ghost-mysql-data) while compose named volumes use underscores
+# (ghosthost_mysql_data).
+#
+# The duplicati-*/ghosthost-staging entries keep the jobs from backing up
+# their own output: when the backup destination, duplicati config, or the
+# export staging area live in docker volumes (as in the dev compose), they sit
+# under /local/volumes too, and without these excludes every run re-backs-up
+# all previous backups — the destination grows without bound and the job
+# never finishes.
 # backingFsBlockDev is a block device docker keeps in that directory.
-DEFAULT_EXCLUDES='*mysql-data/*:*clickhouse-data/*:*/backingFsBlockDev:*/metadata.db:/data/coolify/backups/*:*/.cache/*'
+DEFAULT_EXCLUDES='*mysql-data/*:*mysql_data/*:*clickhouse-data/*:*clickhouse_data/*:*duplicati_backups/*:*duplicati-backups/*:*duplicati_config/*:*duplicati-config/*:*ghosthost_staging/*:*ghosthost-staging/*:*/backingFsBlockDev:*/metadata.db:/data/coolify/backups/*:*/.cache/*'
 EXCLUDES="${DUPLICATI_BOOTSTRAP_EXCLUDES:-$DEFAULT_EXCLUDES}"
 
 RUN_NOW="${DUPLICATI_BOOTSTRAP_RUN_NOW:-true}"

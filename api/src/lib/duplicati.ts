@@ -92,6 +92,14 @@ async function safeText(response: Response): Promise<string> {
   }
 }
 
+/**
+ * Requests against a backup whose local database is busy (e.g. its backup is
+ * currently running) can block server-side for as long as the task runs, so
+ * every call carries a timeout — better to fail one job's listing than to
+ * hang the whole /backups response behind it.
+ */
+const REQUEST_TIMEOUT_MS = 30 * 1000
+
 async function duplicatiFetch<T>(
   path: string,
   init?: RequestInit,
@@ -100,6 +108,7 @@ async function duplicatiFetch<T>(
 
   let response = await fetch(`${baseUrl()}${path}`, {
     ...init,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
@@ -112,6 +121,7 @@ async function duplicatiFetch<T>(
     token = await accessToken(true)
     response = await fetch(`${baseUrl()}${path}`, {
       ...init,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
@@ -204,8 +214,18 @@ export async function listDuplicatiFilesets(
 }
 
 /**
- * Check whether a fileset version contains any files under the given path
- * prefix (as recorded at backup time, e.g. /local/volumes/<vol>/_data/).
+ * Check whether a fileset version contains the given path — a directory
+ * (trailing "/") or an exact file, as recorded at backup time (e.g.
+ * /local/volumes/<vol>/_data/ or /data/db_dumps/<db>.sql.gz).
+ *
+ * The path goes in the "filter" query parameter: Duplicati's REST API
+ * exposes a single "/backup/{id}/files" endpoint and matches the filter
+ * server-side (a URL path segment 404s). Both "prefix-only" and
+ * "folder-contents" must be false — the response then contains exactly the
+ * matching entry when the path exists in the version and nothing otherwise.
+ * ("prefix-only=true" returns a placeholder entry with an empty Path even
+ * for paths the version does not contain, and "folder-contents=true"
+ * returns [] for file paths, so neither works as an existence check.)
  */
 export async function duplicatiVersionContainsPath({
   backupId,
@@ -217,18 +237,22 @@ export async function duplicatiVersionContainsPath({
   pathPrefix: string
 }): Promise<boolean> {
   const query = new URLSearchParams({
+    filter: pathPrefix,
     time,
     "prefix-only": "false",
-    "folder-contents": "true",
+    "folder-contents": "false",
   })
 
-  const payload = await duplicatiFetch<{ Files?: unknown[] }>(
-    `/api/v1/backup/${encodeURIComponent(backupId)}/files/${encodeURIComponent(
-      pathPrefix,
-    )}?${query.toString()}`,
+  const payload = await duplicatiFetch<{ Files?: Array<{ Path?: unknown }> }>(
+    `/api/v1/backup/${encodeURIComponent(backupId)}/files?${query.toString()}`,
   )
 
-  return Array.isArray(payload.Files) && payload.Files.length > 0
+  return (
+    Array.isArray(payload.Files) &&
+    payload.Files.some(
+      (file) => typeof file?.Path === "string" && file.Path.length > 0,
+    )
+  )
 }
 
 /**

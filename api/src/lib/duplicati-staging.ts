@@ -85,15 +85,38 @@ export async function stageDuplicatiVersion({
   const volumeBackupPath = ghostContentVolumeBackupPath(applicationUuid)
   const dumpBackupPath = dbDumpBackupPath(database)
 
+  // Both pieces must exist in the version before restoring anything. Checking
+  // up front gives each miss an accurate error, and guarantees the restore
+  // below matches files under both /local and /data — so their largest
+  // common prefix is "/" and Duplicati recreates the full directory layout
+  // under targetDir. (When only one path matches, Duplicati strips the whole
+  // shared prefix — including the volume's _data/ folder — and the restored
+  // layout becomes unrecognizable.) Errors from the checks themselves (e.g.
+  // Duplicati busy or unreachable) propagate as-is rather than being
+  // misreported as a missing-data problem with the chosen version.
   const hasVolume = await duplicatiVersionContainsPath({
     backupId,
     time: versionTime,
     pathPrefix: volumeBackupPath,
-  }).catch(() => false)
+  })
 
   if (!hasVolume) {
     throw new Error(
       "This backup version does not contain data for this site. Pick a version taken while the site was deployed.",
+    )
+  }
+
+  const dumpFileNameForError = path.posix.basename(dumpBackupPath)
+
+  const hasDump = await duplicatiVersionContainsPath({
+    backupId,
+    time: versionTime,
+    pathPrefix: dumpBackupPath,
+  })
+
+  if (!hasDump) {
+    throw new Error(
+      `This backup version has the site's files but no database dump (${dumpFileNameForError}). It was likely taken before automatic database dumps covered this site — pick a newer version.`,
     )
   }
 
