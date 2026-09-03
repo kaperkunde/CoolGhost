@@ -39,4 +39,11 @@ export const config = {
   /** uid/gid the Ghost container runs as — restored content is chowned to this. */
   ghostContentUid: Number(process.env.GHOST_CONTENT_UID ?? 1000),
   ghostContentGid: Number(process.env.GHOST_CONTENT_GID ?? 1000),
+
+  // Redirect-domain support. Optional — when the proxy dynamic dir is not
+  // mounted the proxy routes respond 503 instead of failing at boot.
+  /** Coolify's Traefik file-provider dir (host /data/coolify/proxy/dynamic) as mounted here. */
+  proxyDynamicDir: optionalEnv("PROXY_DYNAMIC_DIR"),
+  /** Cert resolver name in the Coolify-generated Traefik config. */
+  traefikCertResolver: optionalEnv("TRAEFIK_CERT_RESOLVER") ?? "letsencrypt",
 }

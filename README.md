@@ -122,6 +122,27 @@ then replace the content volume and re-import the database. When `STAGING_DIR`
 or the Duplicati env is missing the routes degrade gracefully (503 / empty
 list) instead of failing at boot.
 
+#### Redirect domains (`/v1/proxy/*`)
+
+The API writes per-redirect Traefik dynamic configs into Coolify's
+file-provider directory so extra addresses 301 to a blog's canonical domain,
+with Let's Encrypt certificates issued through the proxy's standard
+`letsencrypt` resolver. Wiring (in `docker-compose.api.yaml`):
+
+| Variable / mount                                    | Notes                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| `${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic` | Coolify's Traefik dynamic-config dir; hot-reloaded |
+| `PROXY_DYNAMIC_DIR`                                 | In-container path (`/proxy-dynamic`); unset ⇒ routes respond 503   |
+| `TRAEFIK_CERT_RESOLVER`                             | Optional; resolver name in the generated proxy config (default `letsencrypt`) |
+
+`PUT /v1/proxy/redirects/:key` with `{ "redirectDomain": "...", "targetDomain": "..." }`
+writes `plekje-redirect-<key>.yaml` atomically; `DELETE /v1/proxy/redirects/:key`
+removes it (idempotent). Router/middleware/service names are `<key>`-prefixed
+because Traefik's file provider shares one namespace across all dynamic files.
+
+> **Note:** servers deployed before this feature need a one-time redeploy of
+> the `ghosthost-api` stack to pick up the `/proxy-dynamic` mount.
+
 Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
 /api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote
 target credentials, so local and remote versions restore identically. Verify

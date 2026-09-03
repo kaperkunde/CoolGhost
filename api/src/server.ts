@@ -7,6 +7,7 @@ import { ensureStagingLayout, startStagingSweeper } from "./lib/staging.js"
 import { dataRouter } from "./routes/data.js"
 import { databasesRouter } from "./routes/databases.js"
 import { provisionRouter } from "./routes/provision.js"
+import { proxyRouter } from "./routes/proxy.js"
 
 const JSON_BODY_LIMIT = "1kb"
 
@@ -44,6 +45,13 @@ app.get("/health", async (_req, res) => {
 app.use("/v1/provision", provisionRouter)
 app.use("/v1/databases", databasesRouter)
 app.use("/v1/data", dataRouter)
+app.use("/v1/proxy", proxyRouter)
+
+if (!config.proxyDynamicDir) {
+  console.info(
+    "PROXY_DYNAMIC_DIR not set — proxy redirect routes will respond 503.",
+  )
+}
 
 async function bootstrapStaging(): Promise<void> {
   if (!config.stagingDir) {
