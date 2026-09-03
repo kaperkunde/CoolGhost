@@ -41,7 +41,10 @@ services:
       - DUPLICATI_STAGING_DIR=/staging
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
-      - "/root/data/dev/ghosthost-staging:/staging"
+      # Shared with the duplicati service below and the GhostHost app's
+      # container (its compose uses the same variable and default) — export
+      # artifacts and restore uploads are exchanged through this mount.
+      - "${GHOSTHOST_STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
     depends_on:
       mysql:
         condition: service_healthy
@@ -151,7 +154,7 @@ services:
       - "/root/data/dev/db_dumps:/data/db_dumps"
       - "/data/coolify:/data/coolify:ro"
       # Shared staging mount — restore target for export/restore jobs run by the api service.
-      - "/root/data/dev/ghosthost-staging:/staging"
+      - "${GHOSTHOST_STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
     healthcheck:
       test:
         - CMD
