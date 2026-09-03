@@ -128,6 +128,19 @@ services:
       - "MYSQL_HOST=mysql"
       - "MYSQL_PORT=3306"
       - "MYSQL_ROOT_PASSWORD=${SERVICE_PASSWORD_MYSQLROOT}"
+      # First-run provisioning of the stock hourly/daily backup jobs. Runs once
+      # per volume (marker: /config/coolghost-bootstrap.json); existing jobs are
+      # never touched. Set DUPLICATI_BOOTSTRAP_ENABLED=false to configure by hand.
+      - "DUPLICATI_BOOTSTRAP_ENABLED=${DUPLICATI_BOOTSTRAP_ENABLED:-true}"
+      # KEEP THIS SAFE: without it the backups cannot be restored, on this host
+      # or any other. Defaults to the same key Duplicati encrypts its own
+      # settings with, so Coolify generates and persists it for you.
+      - "DUPLICATI_BACKUP_PASSPHRASE=${DUPLICATI_BACKUP_PASSPHRASE:-${SERVICE_PASSWORD_ENCRYPT}}"
+      # Point the daily job at off-host storage (any Duplicati backend URL,
+      # e.g. s3://bucket/path?auth-username=...) — local disk alone does not
+      # survive losing the server.
+      - "DUPLICATI_DAILY_TARGET_URL=${DUPLICATI_DAILY_TARGET_URL:-file:///backups/daily}"
+      - "DUPLICATI_DAILY_AT=${DUPLICATI_DAILY_AT:-03:30}"
     depends_on:
       mysql:
         condition: service_healthy
