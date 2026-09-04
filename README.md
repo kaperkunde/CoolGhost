@@ -114,7 +114,8 @@ requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 | `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                          |
 
 Endpoints (all require the bearer token): `GET /v1/data/backups` lists
-Duplicati jobs and their restorable versions; `POST /v1/data/spots/:spot/export`
+Duplicati jobs and their restorable versions (a job whose versions could not
+be listed carries `versionsError` instead of pretending to be empty); `POST /v1/data/spots/:spot/export`
 and `POST /v1/data/spots/:spot/restore` start async jobs polled via
 `GET /v1/data/jobs/:id`. Exports package `info.json` + `db.sql` + `content/`
 into one `.tar.gz` under `staging/artifacts/`, described by

@@ -112,7 +112,42 @@ function requireString(
   return value.trim()
 }
 
-/** List Duplicati backup jobs with their restorable versions. */
+const FILESET_RETRY_DELAY_MS = 1500
+
+/**
+ * List a job's restore points, retrying once: right after a backup run
+ * Duplicati can briefly refuse or time out on the job's local database, and
+ * one short retry turns most of those into a normal answer.
+ */
+async function listFilesetsWithRetry(backupId: string) {
+  try {
+    return { versions: await listDuplicatiFilesets(backupId), versionsError: null }
+  } catch (firstError) {
+    await new Promise((resolve) => setTimeout(resolve, FILESET_RETRY_DELAY_MS))
+
+    try {
+      return { versions: await listDuplicatiFilesets(backupId), versionsError: null }
+    } catch (error) {
+      console.error("Failed to list Duplicati filesets", {
+        backupId,
+        firstError,
+        error,
+      })
+
+      return {
+        versions: [],
+        versionsError:
+          error instanceof Error ? error.message : "Could not list restore points.",
+      }
+    }
+  }
+}
+
+/**
+ * List Duplicati backup jobs with their restorable versions. A job whose
+ * versions could not be listed comes back with an empty list AND a
+ * versionsError, so the caller can tell "no restore points" from "unknown".
+ */
 dataRouter.get("/backups", async (_req, res) => {
   if (!duplicatiConfigured()) {
     res.json({ ok: true, configured: false, backups: [] })
@@ -125,13 +160,7 @@ dataRouter.get("/backups", async (_req, res) => {
     const withVersions = await Promise.all(
       backups.map(async (backup) => ({
         ...backup,
-        versions: await listDuplicatiFilesets(backup.id).catch((error) => {
-          console.error("Failed to list Duplicati filesets", {
-            backupId: backup.id,
-            error,
-          })
-          return []
-        }),
+        ...(await listFilesetsWithRetry(backup.id)),
       })),
     )
 
