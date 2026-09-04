@@ -126,7 +126,21 @@ the `uploadRelPath` to pass as the `upload` restore source. Restores expect
 the caller to stop the Ghost container first, snapshot current data as an
 undo artifact, then replace the content volume and re-import the database.
 When `STAGING_DIR` or the Duplicati env is missing the routes degrade
-gracefully (503 / empty list) instead of failing at boot.
+gracefully (503 / empty list) instead of failing at boot — with `DUPLICATI_URL`
+unset, `GET /v1/data/backups` answers `{"configured": false, "backups": []}`
+and GhostHost shows "Automatic backups are not configured on this server yet".
+
+The split stacks above deploy no duplicati of their own: only
+`docker-compose.shared.yaml` (the all-in-one development stack) defines that
+service, so a server built from the per-resource files needs its own duplicati
+alongside them, and `DUPLICATI_URL` must be the address the **api container**
+can reach it at. On Coolify that is the cross-stack hostname — the resource's
+custom name with a trailing dash, e.g. `http://duplicati-ghost-:8200` — not
+`http://duplicati:8200`, which only resolves inside a single compose stack.
+A wrong or unreachable value is reported: since every Duplicati call is
+bounded and wrapped, `GET /v1/data/backups` answers 502 with the underlying
+reason (`getaddrinfo ENOTFOUND …`, `timed out after 15000ms`, …) rather than
+hanging or returning a bare 500.
 
 The staging dir is local to each server: every server runs its own
 mysql + api + duplicati stack, and the GhostHost app talks to the api of
