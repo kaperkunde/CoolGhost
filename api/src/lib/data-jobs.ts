@@ -2,6 +2,7 @@ import { randomUUID } from "crypto"
 import { promises as fs } from "fs"
 import path from "path"
 
+import { UserFacingError } from "./errors.js"
 import { jobsDir } from "./staging.js"
 
 /**
@@ -168,7 +169,10 @@ export async function startDataJob({
     .catch(async (error: unknown) => {
       console.error("Data job failed", { jobId: job.id, kind, spotId, error })
       job.phase = "failed"
-      job.error = error instanceof Error ? error.message : String(error)
+      job.error =
+        error instanceof UserFacingError
+          ? error.message
+          : `Something went wrong while ${kind === "export" ? "exporting" : "restoring"} this site's data. Contact support if this keeps happening.`
       await touch()
     })
 

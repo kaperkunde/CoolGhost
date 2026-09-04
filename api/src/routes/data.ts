@@ -71,7 +71,8 @@ function handleError(res: import("express").Response, error: unknown): void {
   }
 
   if (error instanceof DuplicatiError) {
-    res.status(502).json({ error: error.message })
+    console.error("Duplicati request failed", { error })
+    res.status(502).json({ error: "Could not reach the backup service." })
     return
   }
 
@@ -136,8 +137,7 @@ async function listFilesetsWithRetry(backupId: string) {
 
       return {
         versions: [],
-        versionsError:
-          error instanceof Error ? error.message : "Could not list restore points.",
+        versionsError: "Could not list restore points for this backup.",
       }
     }
   }

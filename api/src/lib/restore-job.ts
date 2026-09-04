@@ -3,6 +3,7 @@ import path from "path"
 
 import type { JobHandle } from "./data-jobs.js"
 import { stageDuplicatiVersion } from "./duplicati-staging.js"
+import { UserFacingError } from "./errors.js"
 import {
   artifactPathForSpot,
   buildCurrentExportArtifact,
@@ -41,7 +42,7 @@ async function stageFromArchive({
   const stat = await fs.stat(archivePath).catch(() => null)
 
   if (!stat?.isFile() || stat.size === 0) {
-    throw new Error("The archive to restore from was not found.")
+    throw new UserFacingError("The archive to restore from was not found.")
   }
 
   await extractSpotArchive({ archivePath, destDir: extractDir })
