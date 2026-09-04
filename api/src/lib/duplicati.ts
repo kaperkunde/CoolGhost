@@ -45,16 +45,127 @@ function baseUrl(): string {
 let cachedToken: { token: string; obtainedAt: number } | null = null
 const TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 
+/**
+ * Requests against a backup whose local database is busy (e.g. its backup is
+ * currently running) can block server-side for as long as the task runs, so
+ * every call carries a timeout — better to fail one job's listing than to
+ * hang the whole /backups response behind it.
+ */
+const REQUEST_TIMEOUT_MS = 30 * 1000
+
+/** Logging in gates every other call, so it gets a shorter leash. */
+const LOGIN_TIMEOUT_MS = 15 * 1000
+
+/**
+ * A timed-out fetch surfaces as the signal's reason (a TimeoutError
+ * DOMException) on some runtimes and as a wrapping error carrying it as
+ * `cause` on others — check both.
+ */
+function isTimeout(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false
+  }
+
+  if ((error as { name?: unknown }).name === "TimeoutError") {
+    return true
+  }
+
+  const cause = (error as { cause?: unknown }).cause
+
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    (cause as { name?: unknown }).name === "TimeoutError"
+  )
+}
+
+function errorDetail(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error)
+  }
+
+  // Node wraps connect/DNS failures ("fetch failed"); the cause names the
+  // actual problem, which is what makes a misconfigured DUPLICATI_URL
+  // diagnosable from the caller's error message.
+  const cause = error.cause
+
+  return cause instanceof Error
+    ? `${error.message}: ${cause.message}`
+    : error.message
+}
+
+/**
+ * One Duplicati HTTP call, always bounded and always failing as a
+ * DuplicatiError: an unreachable or wedged web service must surface as a 502
+ * with a reason, not as a hung request or a bare 500.
+ */
+async function duplicatiRequest(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  try {
+    return await fetch(`${baseUrl()}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (error) {
+    if (isTimeout(error)) {
+      throw new DuplicatiError(
+        `Duplicati request ${path} timed out after ${timeoutMs}ms`,
+      )
+    }
+
+    throw new DuplicatiError(
+      `Duplicati request ${path} failed: ${errorDetail(error)}`,
+    )
+  }
+}
+
+async function readJson<T>(response: Response, path: string): Promise<T> {
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    if (isTimeout(error)) {
+      throw new DuplicatiError(`Duplicati response for ${path} timed out`)
+    }
+
+    throw new DuplicatiError(
+      `Duplicati response for ${path} could not be read: ${errorDetail(error)}`,
+    )
+  }
+}
+
+let pendingLogin: Promise<string> | null = null
+
+/**
+ * Endpoints that fan out (one request per backup job) would otherwise open a
+ * login per request against an already busy Duplicati — concurrent callers
+ * share one attempt.
+ */
 async function login(): Promise<string> {
+  pendingLogin ??= performLogin().finally(() => {
+    pendingLogin = null
+  })
+
+  return pendingLogin
+}
+
+async function performLogin(): Promise<string> {
   if (!config.duplicatiPassword) {
     throw new DuplicatiError("DUPLICATI_PASSWORD is not configured")
   }
 
-  const response = await fetch(`${baseUrl()}/api/v1/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ Password: config.duplicatiPassword }),
-  })
+  const path = "/api/v1/auth/login"
+  const response = await duplicatiRequest(
+    path,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ Password: config.duplicatiPassword }),
+    },
+    LOGIN_TIMEOUT_MS,
+  )
 
   if (!response.ok) {
     throw new DuplicatiError(
@@ -62,7 +173,7 @@ async function login(): Promise<string> {
     )
   }
 
-  const payload = (await response.json()) as { AccessToken?: string }
+  const payload = await readJson<{ AccessToken?: string }>(response, path)
 
   if (!payload.AccessToken) {
     throw new DuplicatiError("Duplicati login returned no access token")
@@ -92,43 +203,35 @@ async function safeText(response: Response): Promise<string> {
   }
 }
 
-/**
- * Requests against a backup whose local database is busy (e.g. its backup is
- * currently running) can block server-side for as long as the task runs, so
- * every call carries a timeout — better to fail one job's listing than to
- * hang the whole /backups response behind it.
- */
-const REQUEST_TIMEOUT_MS = 30 * 1000
-
 async function duplicatiFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
   let token = await accessToken()
 
-  let response = await fetch(`${baseUrl()}${path}`, {
-    ...init,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...init?.headers,
-      Authorization: `Bearer ${token}`,
-    },
-  })
+  const request = (bearer: string) =>
+    duplicatiRequest(
+      path,
+      {
+        ...init,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...init?.headers,
+          Authorization: `Bearer ${bearer}`,
+        },
+      },
+      REQUEST_TIMEOUT_MS,
+    )
+
+  let response = await request(token)
 
   if (response.status === 401) {
+    // A cached token the server no longer accepts: force a fresh login rather
+    // than reusing the one that just bounced.
+    cachedToken = null
     token = await accessToken(true)
-    response = await fetch(`${baseUrl()}${path}`, {
-      ...init,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...init?.headers,
-        Authorization: `Bearer ${token}`,
-      },
-    })
+    response = await request(token)
   }
 
   if (!response.ok) {
@@ -137,7 +240,7 @@ async function duplicatiFetch<T>(
     )
   }
 
-  return (await response.json()) as T
+  return readJson<T>(response, path)
 }
 
 type RawBackupListEntry = {
