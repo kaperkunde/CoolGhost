@@ -19,6 +19,7 @@ import {
   assertSafeDatabaseName,
   assertSafeName,
   ghostContentVolumeDataDir,
+  resolveStagingRelativePath,
   toStagingRelativePath,
 } from "./staging.js"
 
@@ -48,10 +49,44 @@ export function artifactMetaPathForSpot(spotId: string): string {
   return path.join(artifactsDir(), `${assertSafeName(spotId, "spot id")}.json`)
 }
 
-/** Sidecar the GhostHost app reads straight from the shared mount. */
+/** Metadata written next to each artifact; served via GET /v1/data/spots/:spot/artifact. */
 export type ArtifactSidecar = DataJobArtifact & {
   spotId: string
   info: SpotArchiveInfo
+}
+
+/**
+ * The spot's current export artifact, or null when there is none (never
+ * exported, swept by the TTL, or the archive file is missing/partial).
+ */
+export async function readArtifactSidecar(
+  spotId: string,
+): Promise<ArtifactSidecar | null> {
+  const safeId = assertSafeName(spotId, "spot id")
+
+  let sidecar: ArtifactSidecar
+
+  try {
+    sidecar = JSON.parse(
+      await fs.readFile(artifactMetaPathForSpot(safeId), "utf8"),
+    ) as ArtifactSidecar
+  } catch {
+    return null
+  }
+
+  if (!sidecar?.relPath || sidecar.spotId !== safeId) {
+    return null
+  }
+
+  const stat = await fs
+    .stat(resolveStagingRelativePath(sidecar.relPath))
+    .catch(() => null)
+
+  if (!stat?.isFile() || stat.size === 0) {
+    return null
+  }
+
+  return { ...sidecar, sizeBytes: stat.size }
 }
 
 async function writeArtifact({

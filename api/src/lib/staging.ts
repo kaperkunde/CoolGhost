@@ -4,8 +4,10 @@ import path from "path"
 import { config } from "../config.js"
 
 /**
- * Layout of the shared staging mount (also mounted into duplicati and the
- * GhostHost app, all at the same mount point):
+ * Layout of the staging dir. It is local to this server: the api owns it and
+ * the duplicati service of the same stack mounts it at the same path so
+ * restores can be staged into it. The GhostHost app never touches it directly
+ * — artifacts are served and uploads received over the /v1/data routes.
  *
  *   artifacts/<spot>.tar.gz + <spot>.json   one export artifact per spot
  *   uploads/<spot>-<id>.tar.gz              user-provided restore archives
@@ -72,8 +74,9 @@ export function assertSafeDatabaseName(value: string): string {
 }
 
 /**
- * Resolve a staging-relative path (as exchanged with the GhostHost app) to an
- * absolute path, refusing traversal outside the staging root.
+ * Resolve a staging-relative path (as stored in job records and handed back to
+ * the GhostHost app as an opaque upload handle) to an absolute path, refusing
+ * traversal outside the staging root.
  */
 export function resolveStagingRelativePath(relPath: string): string {
   const root = stagingRoot()

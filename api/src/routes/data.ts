@@ -1,3 +1,5 @@
+import { createReadStream } from "fs"
+
 import { Router } from "express"
 
 import { config } from "../config.js"
@@ -14,13 +16,23 @@ import {
   listDuplicatiBackups,
   listDuplicatiFilesets,
 } from "../lib/duplicati.js"
-import { runExportJob, type ExportSource } from "../lib/export-job.js"
+import {
+  readArtifactSidecar,
+  runExportJob,
+  type ExportSource,
+} from "../lib/export-job.js"
 import { runRestoreJob, type RestoreSource } from "../lib/restore-job.js"
 import {
   assertSafeDatabaseName,
   assertSafeName,
+  resolveStagingRelativePath,
   StagingUnavailableError,
 } from "../lib/staging.js"
+import {
+  EmptyUploadError,
+  UploadTooLargeError,
+  writeRestoreUpload,
+} from "../lib/uploads.js"
 import { requireApiToken } from "../middleware/auth.js"
 
 export const dataRouter = Router()
@@ -50,6 +62,11 @@ function handleError(res: import("express").Response, error: unknown): void {
 
   if (error instanceof JobConflictError) {
     res.status(409).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof UploadTooLargeError) {
+    res.status(413).json({ error: error.message })
     return
   }
 
@@ -95,7 +112,42 @@ function requireString(
   return value.trim()
 }
 
-/** List Duplicati backup jobs with their restorable versions. */
+const FILESET_RETRY_DELAY_MS = 1500
+
+/**
+ * List a job's restore points, retrying once: right after a backup run
+ * Duplicati can briefly refuse or time out on the job's local database, and
+ * one short retry turns most of those into a normal answer.
+ */
+async function listFilesetsWithRetry(backupId: string) {
+  try {
+    return { versions: await listDuplicatiFilesets(backupId), versionsError: null }
+  } catch (firstError) {
+    await new Promise((resolve) => setTimeout(resolve, FILESET_RETRY_DELAY_MS))
+
+    try {
+      return { versions: await listDuplicatiFilesets(backupId), versionsError: null }
+    } catch (error) {
+      console.error("Failed to list Duplicati filesets", {
+        backupId,
+        firstError,
+        error,
+      })
+
+      return {
+        versions: [],
+        versionsError:
+          error instanceof Error ? error.message : "Could not list restore points.",
+      }
+    }
+  }
+}
+
+/**
+ * List Duplicati backup jobs with their restorable versions. A job whose
+ * versions could not be listed comes back with an empty list AND a
+ * versionsError, so the caller can tell "no restore points" from "unknown".
+ */
 dataRouter.get("/backups", async (_req, res) => {
   if (!duplicatiConfigured()) {
     res.json({ ok: true, configured: false, backups: [] })
@@ -108,13 +160,7 @@ dataRouter.get("/backups", async (_req, res) => {
     const withVersions = await Promise.all(
       backups.map(async (backup) => ({
         ...backup,
-        versions: await listDuplicatiFilesets(backup.id).catch((error) => {
-          console.error("Failed to list Duplicati filesets", {
-            backupId: backup.id,
-            error,
-          })
-          return []
-        }),
+        ...(await listFilesetsWithRetry(backup.id)),
       })),
     )
 
@@ -192,6 +238,80 @@ dataRouter.post("/spots/:spotId/restore", async (req, res) => {
 
     res.status(202).json({ ok: true, job: jobResponse(job) })
   } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/** Metadata of the spot's current export artifact (null when there is none). */
+dataRouter.get("/spots/:spotId/artifact", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const artifact = await readArtifactSidecar(spotId)
+
+    res.json({ ok: true, artifact })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/** Stream the spot's current export artifact. */
+dataRouter.get("/spots/:spotId/artifact/download", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const artifact = await readArtifactSidecar(spotId)
+
+    if (!artifact) {
+      res.status(404).json({ error: "No export artifact exists for this spot." })
+      return
+    }
+
+    const fileName = artifact.downloadName.replace(/["\\\r\n]/g, "_")
+
+    res.status(200)
+    res.setHeader("Content-Type", "application/gzip")
+    res.setHeader("Content-Length", String(artifact.sizeBytes))
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`)
+    res.setHeader("Cache-Control", "no-store")
+
+    const stream = createReadStream(resolveStagingRelativePath(artifact.relPath))
+
+    stream.on("error", (error) => {
+      console.error("Artifact stream failed", { spotId, error })
+      res.destroy(error)
+    })
+
+    res.on("close", () => {
+      stream.destroy()
+    })
+
+    stream.pipe(res)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/**
+ * Receive a restore archive as the raw request body. The returned
+ * uploadRelPath is passed back as the `upload` restore source.
+ */
+dataRouter.post("/spots/:spotId/uploads", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const declaredLength = Number(req.header("content-length") ?? "")
+
+    if (Number.isFinite(declaredLength) && declaredLength > config.maxUploadBytes) {
+      throw new UploadTooLargeError()
+    }
+
+    const upload = await writeRestoreUpload({ spotId, body: req })
+
+    res.json({ ok: true, ...upload })
+  } catch (error) {
+    if (error instanceof EmptyUploadError) {
+      res.status(400).json({ error: error.message })
+      return
+    }
+
     handleError(res, error)
   }
 })

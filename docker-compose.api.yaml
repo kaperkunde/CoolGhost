@@ -17,9 +17,16 @@ services:
       DUPLICATI_URL: ${DUPLICATI_URL:-}
       DUPLICATI_PASSWORD: ${DUPLICATI_PASSWORD:-}
       DUPLICATI_STAGING_DIR: ${DUPLICATI_STAGING_DIR:-/staging}
+      # Redirect-domain support: Coolify's Traefik file-provider dir. The
+      # api writes per-redirect dynamic configs there; Traefik hot-reloads.
+      PROXY_DYNAMIC_DIR: /proxy-dynamic
+      TRAEFIK_CERT_RESOLVER: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
+      # Export artifacts, restore uploads and job state; served to the GhostHost
+      # app over /v1/data. Mount the same host dir into duplicati at /staging.
       - "${STAGING_HOST_DIR:-/root/data/ghosthost-staging}:/staging"
+      - "${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic"
     healthcheck:
       test:
         [

@@ -105,22 +105,53 @@ requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 | Variable / mount                      | Notes                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `/var/lib/docker/volumes:/local/volumes` | Read/write access to each blog's `ghost-content-data` volume                             |
-| shared staging dir at `/staging`      | Same host dir must be mounted into duplicati and the GhostHost app (`GHOSTHOST_STAGING_DIR`) |
+| `${STAGING_HOST_DIR}:/staging`        | Export artifacts, restore uploads, job state. Mount the same host dir into duplicati; nothing else needs it |
 | `STAGING_DIR`                         | In-container staging path (`/staging`)                                                      |
 | `DUPLICATI_URL` / `DUPLICATI_PASSWORD` | Duplicati web service (e.g. `http://duplicati:8200`) + `SERVICE_PASSWORD_DUPLICATI`        |
 | `DUPLICATI_STAGING_DIR`               | Staging path as seen inside the duplicati container (defaults to `STAGING_DIR`)             |
 | `ARTIFACT_TTL_HOURS`                  | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)           |
+| `MAX_UPLOAD_BYTES`                    | Optional; largest restore archive accepted by the uploads route (default 4 GiB)             |
 | `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                          |
 
 Endpoints (all require the bearer token): `GET /v1/data/backups` lists
-Duplicati jobs and their restorable versions; `POST /v1/data/spots/:spot/export`
+Duplicati jobs and their restorable versions (a job whose versions could not
+be listed carries `versionsError` instead of pretending to be empty); `POST /v1/data/spots/:spot/export`
 and `POST /v1/data/spots/:spot/restore` start async jobs polled via
 `GET /v1/data/jobs/:id`. Exports package `info.json` + `db.sql` + `content/`
-into one `.tar.gz` under `staging/artifacts/`; restores expect the caller to
-stop the Ghost container first, snapshot current data as an undo artifact,
-then replace the content volume and re-import the database. When `STAGING_DIR`
-or the Duplicati env is missing the routes degrade gracefully (503 / empty
-list) instead of failing at boot.
+into one `.tar.gz` under `staging/artifacts/`, described by
+`GET /v1/data/spots/:spot/artifact` and streamed by
+`GET /v1/data/spots/:spot/artifact/download`. Restore archives are received
+as a raw request body by `POST /v1/data/spots/:spot/uploads`, which returns
+the `uploadRelPath` to pass as the `upload` restore source. Restores expect
+the caller to stop the Ghost container first, snapshot current data as an
+undo artifact, then replace the content volume and re-import the database.
+When `STAGING_DIR` or the Duplicati env is missing the routes degrade
+gracefully (503 / empty list) instead of failing at boot.
+
+The staging dir is local to each server: every server runs its own
+mysql + api + duplicati stack, and the GhostHost app talks to the api of
+whichever server hosts a blog. Nothing outside the stack mounts it.
+
+#### Redirect domains (`/v1/proxy/*`)
+
+The API writes per-redirect Traefik dynamic configs into Coolify's
+file-provider directory so extra addresses 301 to a blog's canonical domain,
+with Let's Encrypt certificates issued through the proxy's standard
+`letsencrypt` resolver. Wiring (in `docker-compose.api.yaml`):
+
+| Variable / mount                                    | Notes                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| `${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic` | Coolify's Traefik dynamic-config dir; hot-reloaded |
+| `PROXY_DYNAMIC_DIR`                                 | In-container path (`/proxy-dynamic`); unset ⇒ routes respond 503   |
+| `TRAEFIK_CERT_RESOLVER`                             | Optional; resolver name in the generated proxy config (default `letsencrypt`) |
+
+`PUT /v1/proxy/redirects/:key` with `{ "redirectDomain": "...", "targetDomain": "..." }`
+writes `plekje-redirect-<key>.yaml` atomically; `DELETE /v1/proxy/redirects/:key`
+removes it (idempotent). Router/middleware/service names are `<key>`-prefixed
+because Traefik's file provider shares one namespace across all dynamic files.
+
+> **Note:** servers deployed before this feature need a one-time redeploy of
+> the `ghosthost-api` stack to pick up the `/proxy-dynamic` mount.
 
 Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
 /api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote

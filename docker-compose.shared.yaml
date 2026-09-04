@@ -39,9 +39,18 @@ services:
       - DUPLICATI_URL=http://duplicati:8200
       - DUPLICATI_PASSWORD=${SERVICE_PASSWORD_DUPLICATI}
       - DUPLICATI_STAGING_DIR=/staging
+      # Redirect-domain support: Coolify's Traefik file-provider dir. The
+      # api writes per-redirect dynamic configs there; Traefik hot-reloads.
+      - PROXY_DYNAMIC_DIR=/proxy-dynamic
+      - TRAEFIK_CERT_RESOLVER=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
-      - "/root/data/dev/ghosthost-staging:/staging"
+      # Export artifacts, restore uploads and job state. Shared only with the
+      # duplicati service below (same host, same path) so restores can be
+      # staged into it; the GhostHost app reaches it through the api's
+      # /v1/data routes, never through a mount.
+      - "${STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
+      - "${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic"
     depends_on:
       mysql:
         condition: service_healthy
@@ -150,8 +159,8 @@ services:
       - "/var/lib/docker/volumes:/local/volumes"
       - "/root/data/dev/db_dumps:/data/db_dumps"
       - "/data/coolify:/data/coolify:ro"
-      # Shared staging mount — restore target for export/restore jobs run by the api service.
-      - "/root/data/dev/ghosthost-staging:/staging"
+      # Same staging dir as the api service — restore target for backup-sourced export/restore jobs.
+      - "${STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
     healthcheck:
       test:
         - CMD
