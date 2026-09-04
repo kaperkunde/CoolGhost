@@ -359,6 +359,56 @@ export async function duplicatiVersionContainsPath({
 }
 
 /**
+ * List a directory as the *duplicati container* sees it, via the web
+ * service's folder-browser endpoint.
+ *
+ * Returns null when the endpoint is unavailable or answers in a shape this
+ * client does not recognise: its exact request/response shape varies across
+ * Duplicati releases, and this is only used to diagnose a misconfigured
+ * staging mount, so "cannot tell" must never be mistaken for "not there".
+ */
+export async function tryListDuplicatiDirectory(
+  dirPath: string,
+): Promise<string[] | null> {
+  // Sent both ways because releases differ on where the parameter is read
+  // from; the unused one is ignored.
+  const query = new URLSearchParams({ path: dirPath, onlyfolders: "false" })
+
+  let payload: unknown
+
+  try {
+    payload = await duplicatiFetch<unknown>(
+      `/api/v1/filesystem?${query.toString()}`,
+      { method: "POST", body: JSON.stringify({ path: dirPath }) },
+    )
+  } catch {
+    return null
+  }
+
+  const entries = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { Files?: unknown })?.Files)
+      ? (payload as { Files: unknown[] }).Files
+      : null
+
+  if (!entries) {
+    return null
+  }
+
+  return entries.flatMap((entry) => {
+    const record = entry as { Path?: unknown; Text?: unknown }
+    const name =
+      typeof record?.Text === "string"
+        ? record.Text
+        : typeof record?.Path === "string"
+          ? record.Path
+          : null
+
+    return name ? [name] : []
+  })
+}
+
+/**
  * Start a restore of the given paths into targetPath (a path valid inside the
  * duplicati container — use the shared staging mount so this service can read
  * the result). Directory paths should end with "/" — a "*" is appended so the

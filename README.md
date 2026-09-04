@@ -11,6 +11,7 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 | MySQL          | `docker-compose.mysql.yaml`     | Once per server             |
 | Analytics      | `docker-compose.analytics.yaml` | Once per server             |
 | GhostHost API  | `docker-compose.api.yaml`       | Once per server             |
+| Duplicati      | `docker-compose.duplicati.yaml` | Once per server             |
 | Traefik routes | `traefik.coolghost.yaml`        | Once per server (see below) |
 | Ghost site     | `docker-compose.yaml`           | One per blog                |
 
@@ -130,17 +131,35 @@ gracefully (503 / empty list) instead of failing at boot — with `DUPLICATI_URL
 unset, `GET /v1/data/backups` answers `{"configured": false, "backups": []}`
 and GhostHost shows "Automatic backups are not configured on this server yet".
 
-The split stacks above deploy no duplicati of their own: only
-`docker-compose.shared.yaml` (the all-in-one development stack) defines that
-service, so a server built from the per-resource files needs its own duplicati
-alongside them, and `DUPLICATI_URL` must be the address the **api container**
-can reach it at. On Coolify that is the cross-stack hostname — the resource's
-custom name with a trailing dash, e.g. `http://duplicati-ghost-:8200` — not
+##### Duplicati (`docker-compose.duplicati.yaml`)
+
+Backup-sourced listing, export and restore need a duplicati alongside the api.
+Deploy `docker-compose.duplicati.yaml` once per server (the all-in-one
+development stack, `docker-compose.shared.yaml`, has its own copy of the
+service — deploy exactly one of the two on a host). Give it a custom name,
+e.g. `duplicati-ghost`, and connect it to the predefined network.
+
+`DUPLICATI_URL` on the **api** resource must be the address the api container
+can reach it at. On Coolify that is the cross-stack hostname — the custom name
+with a trailing dash, e.g. `http://duplicati-ghost-:8200` — not
 `http://duplicati:8200`, which only resolves inside a single compose stack.
 A wrong or unreachable value is reported: since every Duplicati call is
 bounded and wrapped, `GET /v1/data/backups` answers 502 with the underlying
 reason (`getaddrinfo ENOTFOUND …`, `timed out after 15000ms`, …) rather than
 hanging or returning a bare 500.
+
+**Both resources must mount the same host directory as `/staging`.** The api
+creates a job directory in it and Duplicati restores into that same directory;
+they are the two halves of one hand-off. Coolify keeps environment variables
+per resource, so `STAGING_HOST_DIR` set on only one of them leaves each
+container with its own private `/staging` — Duplicati then restores into a
+directory the api cannot see, and every backup-sourced export fails with
+*"Duplicati reported the restore finished, but nothing appeared in …"*. Set
+`STAGING_HOST_DIR` to the same value on the api and duplicati resources (or
+leave it unset on both, so both take the `/root/data/ghosthost-staging`
+default), and set the api's `DUPLICATI_STAGING_DIR` to the path duplicati has
+it mounted at (`/staging`). The api probes the mount before starting a restore
+and fails immediately, with both paths named, when the two do not match.
 
 The staging dir is local to each server: every server runs its own
 mysql + api + duplicati stack, and the GhostHost app talks to the api of

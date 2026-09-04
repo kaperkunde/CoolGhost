@@ -1,0 +1,64 @@
+# Duplicati for a server built from the per-resource stacks
+# (docker-compose.mysql.yaml + docker-compose.api.yaml + one
+# docker-compose.yaml per blog). The all-in-one development stack
+# (docker-compose.shared.yaml) has its own copy of this service; deploy exactly
+# one of the two on a host.
+#
+# The staging mount below is what makes backup-sourced export and restore work:
+# the api creates a job directory in it and Duplicati restores into that same
+# directory. Both services must have the *same host directory* mounted, so set
+# STAGING_HOST_DIR to the same value on this resource and on the api resource
+# (Coolify keeps environment variables per resource — a value set on only one
+# of them leaves each container with its own private /staging, and every
+# restore then "succeeds" into a directory the api cannot see).
+services:
+  duplicati:
+    build: ./duplicati
+    restart: always
+    environment:
+      - SERVICE_URL_DUPLICATI
+      - SERVICE_URL_DUPLICATI_8200=${SERVICE_URL_DUPLICATI_8200}
+      - PUID=0
+      - PGID=0
+      - "TZ=${TZ:-Europe/Amsterdam}"
+      - "SETTINGS_ENCRYPTION_KEY=${SERVICE_PASSWORD_ENCRYPT}"
+      # The api authenticates with this as DUPLICATI_PASSWORD; on Coolify give
+      # both resources the same SERVICE_PASSWORD_DUPLICATI.
+      - "DUPLICATI__WEBSERVICE_PASSWORD=${SERVICE_PASSWORD_DUPLICATI}"
+      # Shared MySQL stack hostname (Coolify custom name + trailing dash, e.g.
+      # mysql-ghost-) — pre-backup.sh dumps every site database through it.
+      - "MYSQL_HOST=${MYSQL_HOST:?Set MYSQL_HOST to the shared MySQL hostname, e.g. mysql-ghost-}"
+      - "MYSQL_PORT=${MYSQL_PORT:-3306}"
+      - "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-${SERVICE_PASSWORD_MYSQLROOT}}"
+      # First-run provisioning of the stock hourly/daily backup jobs. Runs once
+      # per volume (marker: /config/coolghost-bootstrap.json); existing jobs are
+      # never touched. Set DUPLICATI_BOOTSTRAP_ENABLED=false to configure by hand.
+      - "DUPLICATI_BOOTSTRAP_ENABLED=${DUPLICATI_BOOTSTRAP_ENABLED:-true}"
+      # KEEP THIS SAFE: without it the backups cannot be restored, on this host
+      # or any other. Defaults to the same key Duplicati encrypts its own
+      # settings with, so Coolify generates and persists it for you.
+      - "DUPLICATI_BACKUP_PASSPHRASE=${DUPLICATI_BACKUP_PASSPHRASE:-${SERVICE_PASSWORD_ENCRYPT}}"
+      # Point the daily job at off-host storage (any Duplicati backend URL,
+      # e.g. s3://bucket/path?auth-username=...) — local disk alone does not
+      # survive losing the server.
+      - "DUPLICATI_DAILY_TARGET_URL=${DUPLICATI_DAILY_TARGET_URL:-file:///backups/daily}"
+      - "DUPLICATI_DAILY_AT=${DUPLICATI_DAILY_AT:-03:30}"
+    volumes:
+      - "${DUPLICATI_CONFIG_HOST_DIR:-/root/data/duplicati/config}:/config"
+      - "${DUPLICATI_BACKUPS_HOST_DIR:-/root/data/duplicati/backups}:/backups"
+      - "/var/lib/docker/volumes:/local/volumes"
+      - "${DB_DUMPS_HOST_DIR:-/root/data/db_dumps}:/data/db_dumps"
+      - "/data/coolify:/data/coolify:ro"
+      # Same host dir the api mounts at /staging (its STAGING_HOST_DIR, and the
+      # path its DUPLICATI_STAGING_DIR names) — restore target for
+      # backup-sourced export/restore jobs.
+      - "${STAGING_HOST_DIR:-/root/data/ghosthost-staging}:/staging"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - "-f"
+        - "http://127.0.0.1:8200"
+      interval: 2s
+      timeout: 10s
+      retries: 15
