@@ -22,7 +22,7 @@ export const config = {
 
   // Backup/export/restore support. All optional — when the mounts/env are
   // absent the data routes respond 503 instead of failing at boot.
-  /** Shared staging bind mount, also mounted into duplicati and the GhostHost app. */
+  /** Staging dir for export artifacts, restore uploads and job state; also mounted into duplicati. */
   stagingDir: optionalEnv("STAGING_DIR"),
   /** Host docker volumes dir (usually /var/lib/docker/volumes) as mounted in this container. */
   volumesDir: optionalEnv("VOLUMES_DIR") ?? "/local/volumes",
@@ -36,6 +36,8 @@ export const config = {
   ),
   /** How long export artifacts, uploads and finished job dirs are kept. */
   artifactTtlHours: Number(process.env.ARTIFACT_TTL_HOURS ?? 24),
+  /** Largest restore archive accepted by POST /v1/data/spots/:spot/uploads. */
+  maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES ?? 4 * 1024 * 1024 * 1024),
   /** uid/gid the Ghost container runs as — restored content is chowned to this. */
   ghostContentUid: Number(process.env.GHOST_CONTENT_UID ?? 1000),
   ghostContentGid: Number(process.env.GHOST_CONTENT_GID ?? 1000),

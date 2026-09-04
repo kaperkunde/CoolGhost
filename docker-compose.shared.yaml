@@ -45,10 +45,11 @@ services:
       - TRAEFIK_CERT_RESOLVER=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
-      # Shared with the duplicati service below and the GhostHost app's
-      # container (its compose uses the same variable and default) — export
-      # artifacts and restore uploads are exchanged through this mount.
-      - "${GHOSTHOST_STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
+      # Export artifacts, restore uploads and job state. Shared only with the
+      # duplicati service below (same host, same path) so restores can be
+      # staged into it; the GhostHost app reaches it through the api's
+      # /v1/data routes, never through a mount.
+      - "${STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
       - "${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic"
     depends_on:
       mysql:
@@ -158,8 +159,8 @@ services:
       - "/var/lib/docker/volumes:/local/volumes"
       - "/root/data/dev/db_dumps:/data/db_dumps"
       - "/data/coolify:/data/coolify:ro"
-      # Shared staging mount — restore target for export/restore jobs run by the api service.
-      - "${GHOSTHOST_STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
+      # Same staging dir as the api service — restore target for backup-sourced export/restore jobs.
+      - "${STAGING_HOST_DIR:-/root/data/dev/ghosthost-staging}:/staging"
     healthcheck:
       test:
         - CMD

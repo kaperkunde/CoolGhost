@@ -52,25 +52,43 @@ export async function packageSpotArchive({
 
   const escapedBase = contentBase.replace(/\./g, "\\.")
 
-  await execFileAsync(
-    "tar",
-    [
-      "-czf",
-      artifactPath,
-      "--transform",
-      `s,^${escapedBase}$,content,`,
-      "--transform",
-      `s,^${escapedBase}/,content/,`,
-      "-C",
-      workDir,
-      "info.json",
-      "db.sql",
-      "-C",
-      contentParent,
-      contentBase,
-    ],
-    { maxBuffer: 10 * 1024 * 1024 },
-  )
+  try {
+    await execFileAsync(
+      "tar",
+      [
+        "-czf",
+        artifactPath,
+        "--transform",
+        `s,^${escapedBase}$,content,`,
+        "--transform",
+        `s,^${escapedBase}/,content/,`,
+        "-C",
+        workDir,
+        "info.json",
+        "db.sql",
+        "-C",
+        contentParent,
+        contentBase,
+      ],
+      { maxBuffer: 10 * 1024 * 1024 },
+    )
+  } catch (error) {
+    // GNU tar exits 1 when a file changed while it was being read, which a
+    // live Ghost site does constantly (its log files). The archive is still
+    // complete apart from that file's tail, so keep it; any other status is
+    // a real failure.
+    const code = (error as { code?: unknown }).code
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "")
+
+    if (code === 1 && /file changed as we read it/i.test(stderr)) {
+      console.warn("tar reported files changing during export; archive kept", {
+        artifactPath,
+      })
+      return
+    }
+
+    throw error
+  }
 }
 
 /**

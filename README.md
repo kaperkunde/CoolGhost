@@ -105,22 +105,31 @@ requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 | Variable / mount                      | Notes                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `/var/lib/docker/volumes:/local/volumes` | Read/write access to each blog's `ghost-content-data` volume                             |
-| shared staging dir at `/staging`      | Same host dir must be mounted into duplicati and the GhostHost app (`GHOSTHOST_STAGING_DIR`) |
+| `${STAGING_HOST_DIR}:/staging`        | Export artifacts, restore uploads, job state. Mount the same host dir into duplicati; nothing else needs it |
 | `STAGING_DIR`                         | In-container staging path (`/staging`)                                                      |
 | `DUPLICATI_URL` / `DUPLICATI_PASSWORD` | Duplicati web service (e.g. `http://duplicati:8200`) + `SERVICE_PASSWORD_DUPLICATI`        |
 | `DUPLICATI_STAGING_DIR`               | Staging path as seen inside the duplicati container (defaults to `STAGING_DIR`)             |
 | `ARTIFACT_TTL_HOURS`                  | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)           |
+| `MAX_UPLOAD_BYTES`                    | Optional; largest restore archive accepted by the uploads route (default 4 GiB)             |
 | `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                          |
 
 Endpoints (all require the bearer token): `GET /v1/data/backups` lists
 Duplicati jobs and their restorable versions; `POST /v1/data/spots/:spot/export`
 and `POST /v1/data/spots/:spot/restore` start async jobs polled via
 `GET /v1/data/jobs/:id`. Exports package `info.json` + `db.sql` + `content/`
-into one `.tar.gz` under `staging/artifacts/`; restores expect the caller to
-stop the Ghost container first, snapshot current data as an undo artifact,
-then replace the content volume and re-import the database. When `STAGING_DIR`
-or the Duplicati env is missing the routes degrade gracefully (503 / empty
-list) instead of failing at boot.
+into one `.tar.gz` under `staging/artifacts/`, described by
+`GET /v1/data/spots/:spot/artifact` and streamed by
+`GET /v1/data/spots/:spot/artifact/download`. Restore archives are received
+as a raw request body by `POST /v1/data/spots/:spot/uploads`, which returns
+the `uploadRelPath` to pass as the `upload` restore source. Restores expect
+the caller to stop the Ghost container first, snapshot current data as an
+undo artifact, then replace the content volume and re-import the database.
+When `STAGING_DIR` or the Duplicati env is missing the routes degrade
+gracefully (503 / empty list) instead of failing at boot.
+
+The staging dir is local to each server: every server runs its own
+mysql + api + duplicati stack, and the GhostHost app talks to the api of
+whichever server hosts a blog. Nothing outside the stack mounts it.
 
 #### Redirect domains (`/v1/proxy/*`)
 

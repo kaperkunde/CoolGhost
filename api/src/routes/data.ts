@@ -1,3 +1,5 @@
+import { createReadStream } from "fs"
+
 import { Router } from "express"
 
 import { config } from "../config.js"
@@ -14,13 +16,23 @@ import {
   listDuplicatiBackups,
   listDuplicatiFilesets,
 } from "../lib/duplicati.js"
-import { runExportJob, type ExportSource } from "../lib/export-job.js"
+import {
+  readArtifactSidecar,
+  runExportJob,
+  type ExportSource,
+} from "../lib/export-job.js"
 import { runRestoreJob, type RestoreSource } from "../lib/restore-job.js"
 import {
   assertSafeDatabaseName,
   assertSafeName,
+  resolveStagingRelativePath,
   StagingUnavailableError,
 } from "../lib/staging.js"
+import {
+  EmptyUploadError,
+  UploadTooLargeError,
+  writeRestoreUpload,
+} from "../lib/uploads.js"
 import { requireApiToken } from "../middleware/auth.js"
 
 export const dataRouter = Router()
@@ -50,6 +62,11 @@ function handleError(res: import("express").Response, error: unknown): void {
 
   if (error instanceof JobConflictError) {
     res.status(409).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof UploadTooLargeError) {
+    res.status(413).json({ error: error.message })
     return
   }
 
@@ -192,6 +209,80 @@ dataRouter.post("/spots/:spotId/restore", async (req, res) => {
 
     res.status(202).json({ ok: true, job: jobResponse(job) })
   } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/** Metadata of the spot's current export artifact (null when there is none). */
+dataRouter.get("/spots/:spotId/artifact", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const artifact = await readArtifactSidecar(spotId)
+
+    res.json({ ok: true, artifact })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/** Stream the spot's current export artifact. */
+dataRouter.get("/spots/:spotId/artifact/download", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const artifact = await readArtifactSidecar(spotId)
+
+    if (!artifact) {
+      res.status(404).json({ error: "No export artifact exists for this spot." })
+      return
+    }
+
+    const fileName = artifact.downloadName.replace(/["\\\r\n]/g, "_")
+
+    res.status(200)
+    res.setHeader("Content-Type", "application/gzip")
+    res.setHeader("Content-Length", String(artifact.sizeBytes))
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`)
+    res.setHeader("Cache-Control", "no-store")
+
+    const stream = createReadStream(resolveStagingRelativePath(artifact.relPath))
+
+    stream.on("error", (error) => {
+      console.error("Artifact stream failed", { spotId, error })
+      res.destroy(error)
+    })
+
+    res.on("close", () => {
+      stream.destroy()
+    })
+
+    stream.pipe(res)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/**
+ * Receive a restore archive as the raw request body. The returned
+ * uploadRelPath is passed back as the `upload` restore source.
+ */
+dataRouter.post("/spots/:spotId/uploads", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const declaredLength = Number(req.header("content-length") ?? "")
+
+    if (Number.isFinite(declaredLength) && declaredLength > config.maxUploadBytes) {
+      throw new UploadTooLargeError()
+    }
+
+    const upload = await writeRestoreUpload({ spotId, body: req })
+
+    res.json({ ok: true, ...upload })
+  } catch (error) {
+    if (error instanceof EmptyUploadError) {
+      res.status(400).json({ error: error.message })
+      return
+    }
+
     handleError(res, error)
   }
 })
