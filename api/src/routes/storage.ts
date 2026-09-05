@@ -6,6 +6,7 @@ import { Router } from "express"
 import { config } from "../config.js"
 import {
   ClickhouseUnavailableError,
+  deleteClickhouseSite,
   getClickhouseUsage,
   listMysqlDatabaseUsage,
 } from "../lib/storage-usage.js"
@@ -153,3 +154,99 @@ storageRouter.get("/analytics", requireApiToken, async (_req, res) => {
     res.status(500).json({ error: "Failed to measure analytics storage" })
   }
 })
+
+/** Same charset the volume-name regex above accepts for the uuid segment. */
+const APPLICATION_UUID_REGEX = /^[A-Za-z0-9._-]+$/
+
+/**
+ * Removes an orphaned Ghost content volume outright. Only meant for volumes
+ * with no Coolify application any more — deleting a live site's content
+ * would break it, so this is a raw directory removal, not a docker call.
+ * Idempotent: a volume that is already gone still reports success.
+ */
+storageRouter.delete(
+  "/content/:applicationUuid",
+  requireApiToken,
+  async (req, res) => {
+    const applicationUuid = String(req.params["applicationUuid"])
+
+    if (!APPLICATION_UUID_REGEX.test(applicationUuid)) {
+      res.status(400).json({ error: "Invalid application uuid" })
+      return
+    }
+
+    const volumesRoot = path.resolve(config.volumesDir)
+    const volumeDir = path.resolve(
+      volumesRoot,
+      `${applicationUuid}_ghost-content-data`,
+    )
+
+    // Belt-and-braces: the regex above already forbids path separators and
+    // "..", but never let a resolved path outside the volumes root through.
+    if (
+      volumeDir !== volumesRoot &&
+      !volumeDir.startsWith(`${volumesRoot}${path.sep}`)
+    ) {
+      res.status(400).json({ error: "Invalid application uuid" })
+      return
+    }
+
+    const existed = await fs
+      .stat(volumeDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false)
+
+    try {
+      await fs.rm(volumeDir, { recursive: true, force: true })
+      res.json({ ok: true, applicationUuid, removed: existed })
+    } catch (error) {
+      console.error("Failed to remove content volume", {
+        applicationUuid,
+        error,
+      })
+      res.status(500).json({ error: "Failed to remove content volume" })
+    }
+  },
+)
+
+/**
+ * Deletes every analytics row for one site uuid. Idempotent — a site uuid
+ * with no rows left still reports success.
+ */
+storageRouter.delete(
+  "/analytics/:siteUuid",
+  requireApiToken,
+  async (req, res) => {
+    const siteUuid = String(req.params["siteUuid"])
+
+    if (!siteUuid || siteUuid.length > 191) {
+      res.status(400).json({ error: "Invalid site uuid" })
+      return
+    }
+
+    if (!config.clickhouseUrl) {
+      res.status(503).json({
+        error:
+          "Analytics storage is not configured on this server (CLICKHOUSE_URL is unset).",
+      })
+      return
+    }
+
+    try {
+      await deleteClickhouseSite(siteUuid)
+      res.json({ ok: true, siteUuid })
+    } catch (error) {
+      if (error instanceof ClickhouseUnavailableError) {
+        console.error("ClickHouse unreachable", { error })
+        res.status(502).json({ error: error.message })
+        return
+      }
+
+      console.error("Failed to delete analytics data for site", {
+        siteUuid,
+        error,
+      })
+      res.status(500).json({ error: "Failed to delete analytics data" })
+    }
+  },
+)

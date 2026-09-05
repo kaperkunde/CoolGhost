@@ -240,6 +240,16 @@ cannot be exact). Site uuids that no database claims are the orphans. Wiring:
 }
 ```
 
+`DELETE /v1/storage/content/:applicationUuid` removes an orphaned Ghost
+content volume outright (a raw directory removal under `VOLUMES_DIR`, not a
+docker call — only meant for volumes whose application no longer exists).
+`DELETE /v1/storage/analytics/:siteUuid` deletes every analytics row for one
+site uuid across the tables above. Both are idempotent (a resource that is
+already gone still reports success) and are how the GhostHost admin cleanup
+view removes storage that no plekje owns. ClickHouse's `ALTER TABLE ...
+DELETE` is an asynchronous mutation — the call queues it and returns; disk
+space is reclaimed once ClickHouse runs it.
+
 Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
 /api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote
 target credentials, so local and remote versions restore identically. Verify

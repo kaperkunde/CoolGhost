@@ -106,14 +106,21 @@ export class ClickhouseUnavailableError extends Error {
 
 const CLICKHOUSE_TIMEOUT_MS = 20 * 1000
 
-async function clickhouseQuery<T>(sql: string): Promise<T[]> {
-  if (!config.clickhouseUrl) {
-    throw new ClickhouseUnavailableError("CLICKHOUSE_URL is not configured")
-  }
-
-  const url = new URL(config.clickhouseUrl)
+function clickhouseRequestUrl(params: Record<string, string> = {}): URL {
+  const url = new URL(config.clickhouseUrl!)
   url.searchParams.set("database", config.clickhouseDatabase)
 
+  for (const [key, value] of Object.entries(params)) {
+    // ClickHouse's HTTP interface binds a `{name:Type}` placeholder in the
+    // query text to a `param_<name>` query-string value — this is how
+    // mutations below take a site uuid without string-building SQL.
+    url.searchParams.set(`param_${key}`, value)
+  }
+
+  return url
+}
+
+function clickhouseHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "text/plain",
   }
@@ -126,13 +133,24 @@ async function clickhouseQuery<T>(sql: string): Promise<T[]> {
     headers["X-ClickHouse-Key"] = config.clickhousePassword
   }
 
-  let response: Response
+  return headers
+}
+
+async function clickhouseFetch(
+  sql: string,
+  params: Record<string, string> = {},
+): Promise<Response> {
+  if (!config.clickhouseUrl) {
+    throw new ClickhouseUnavailableError("CLICKHOUSE_URL is not configured")
+  }
+
+  const url = clickhouseRequestUrl(params)
 
   try {
-    response = await fetch(url, {
+    return await fetch(url, {
       method: "POST",
-      headers,
-      body: `${sql} FORMAT JSONEachRow`,
+      headers: clickhouseHeaders(),
+      body: sql,
       signal: AbortSignal.timeout(CLICKHOUSE_TIMEOUT_MS),
     })
   } catch (error) {
@@ -142,7 +160,10 @@ async function clickhouseQuery<T>(sql: string): Promise<T[]> {
       }`,
     )
   }
+}
 
+async function clickhouseQuery<T>(sql: string): Promise<T[]> {
+  const response = await clickhouseFetch(`${sql} FORMAT JSONEachRow`)
   const text = await response.text()
 
   if (!response.ok) {
@@ -153,6 +174,19 @@ async function clickhouseQuery<T>(sql: string): Promise<T[]> {
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => JSON.parse(line) as T)
+}
+
+/** Runs a statement with no result rows (an ALTER TABLE mutation here). */
+async function clickhouseCommand(
+  sql: string,
+  params: Record<string, string> = {},
+): Promise<void> {
+  const response = await clickhouseFetch(sql, params)
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`ClickHouse command failed (${response.status}): ${text}`)
+  }
 }
 
 /** Analytics tables whose rows are keyed by site_uuid. */
@@ -219,5 +253,19 @@ export async function getClickhouseUsage(): Promise<ClickhouseUsage> {
         estimatedBytes: Math.round(site.estimatedBytes),
       }))
       .sort((a, b) => b.estimatedBytes - a.estimatedBytes),
+  }
+}
+
+/**
+ * Deletes every analytics row for one site uuid across the tables it can
+ * appear in. ClickHouse mutations (ALTER TABLE ... DELETE) are asynchronous —
+ * this queues the deletes and returns; disk space is reclaimed once they run.
+ */
+export async function deleteClickhouseSite(siteUuid: string): Promise<void> {
+  for (const table of SITE_TABLES) {
+    await clickhouseCommand(
+      `ALTER TABLE ${table} DELETE WHERE site_uuid = {site_uuid:String}`,
+      { site_uuid: siteUuid },
+    )
   }
 }
