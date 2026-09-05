@@ -21,6 +21,10 @@ services:
       # api writes per-redirect dynamic configs there; Traefik hot-reloads.
       PROXY_DYNAMIC_DIR: /proxy-dynamic
       TRAEFIK_CERT_RESOLVER: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      # Analytics storage reporting: the shared analytics stack's ClickHouse
+      # (Coolify custom name `ghost-analytics` + trailing dash).
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse-ghost-analytics-:8123}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-ghost_analytics}
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
       # Export artifacts, restore uploads and job state; served to the GhostHost

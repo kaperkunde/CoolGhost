@@ -212,6 +212,34 @@ Orphaned volumes (no application any more) are included so the GhostHost
 admin cleanup view can surface them. `partial` is `true` when part of a tree
 could not be read. The route responds 503 when the volumes mount is missing.
 
+`GET /v1/storage/databases` reports every blog database on the shared MySQL
+(`information_schema` data + index length, table count) together with the
+Ghost `site_uuid` setting read from it, which is the key the analytics rows
+carry:
+
+```json
+{ "ok": true, "databases": [ { "name": "demo_plek_je", "sizeBytes": 52428800, "tableCount": 118, "siteUuid": "…" } ] }
+```
+
+`GET /v1/storage/analytics` reports ClickHouse usage: bytes on disk per table
+in `CLICKHOUSE_DATABASE`, and an estimate per `site_uuid` (each table's bytes
+apportioned by the site's share of its rows — the tables are shared, so this
+cannot be exact). Site uuids that no database claims are the orphans. Wiring:
+
+| Variable              | Notes                                                                        |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `CLICKHOUSE_URL`      | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 |
+| `CLICKHOUSE_DATABASE` | Defaults to `ghost_analytics`                                                |
+| `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | Optional; the stock stack uses the passwordless default user |
+
+```json
+{
+  "ok": true,
+  "tables": [ { "name": "analytics_events", "bytesOnDisk": 1048576, "rows": 12000 } ],
+  "sites": [ { "siteUuid": "…", "rows": 9000, "estimatedBytes": 786432 } ]
+}
+```
+
 Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
 /api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote
 target credentials, so local and remote versions restore identically. Verify

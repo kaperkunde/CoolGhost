@@ -4,6 +4,11 @@ import path from "node:path"
 import { Router } from "express"
 
 import { config } from "../config.js"
+import {
+  ClickhouseUnavailableError,
+  getClickhouseUsage,
+  listMysqlDatabaseUsage,
+} from "../lib/storage-usage.js"
 import { requireApiToken } from "../middleware/auth.js"
 
 export const storageRouter = Router()
@@ -107,4 +112,44 @@ storageRouter.get("/content", requireApiToken, async (_req, res) => {
   }
 
   res.json({ ok: true, volumes })
+})
+
+/** Size of every blog database on the shared MySQL, with its Ghost site uuid. */
+storageRouter.get("/databases", requireApiToken, async (_req, res) => {
+  try {
+    const databases = await listMysqlDatabaseUsage()
+    res.json({ ok: true, databases })
+  } catch (error) {
+    console.error("Failed to measure MySQL databases", { error })
+    res.status(500).json({ error: "Failed to measure databases" })
+  }
+})
+
+/**
+ * Analytics storage: bytes on disk per ClickHouse table, and an estimate
+ * per site_uuid so the GhostHost admin can attribute it to a blog (or spot
+ * a site uuid no blog owns any more).
+ */
+storageRouter.get("/analytics", requireApiToken, async (_req, res) => {
+  if (!config.clickhouseUrl) {
+    res.status(503).json({
+      error:
+        "Analytics storage is not configured on this server (CLICKHOUSE_URL is unset).",
+    })
+    return
+  }
+
+  try {
+    const usage = await getClickhouseUsage()
+    res.json({ ok: true, ...usage })
+  } catch (error) {
+    if (error instanceof ClickhouseUnavailableError) {
+      console.error("ClickHouse unreachable", { error })
+      res.status(502).json({ error: error.message })
+      return
+    }
+
+    console.error("Failed to measure analytics storage", { error })
+    res.status(500).json({ error: "Failed to measure analytics storage" })
+  }
 })
