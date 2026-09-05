@@ -186,6 +186,32 @@ because Traefik's file provider shares one namespace across all dynamic files.
 > **Note:** servers deployed before this feature need a one-time redeploy of
 > the `ghosthost-api` stack to pick up the `/proxy-dynamic` mount.
 
+#### Content storage (`/v1/storage/*`)
+
+`GET /v1/storage/content` walks every `<application-uuid>_ghost-content-data`
+volume under `VOLUMES_DIR` (the `/var/lib/docker/volumes` mount the data
+routes already use) and reports the apparent size and file count of each
+blog's Ghost content directory:
+
+```json
+{
+  "ok": true,
+  "volumes": [
+    {
+      "applicationUuid": "abc123",
+      "volumeName": "abc123_ghost-content-data",
+      "sizeBytes": 734003200,
+      "fileCount": 1842,
+      "partial": false
+    }
+  ]
+}
+```
+
+Orphaned volumes (no application any more) are included so the GhostHost
+admin cleanup view can surface them. `partial` is `true` when part of a tree
+could not be read. The route responds 503 when the volumes mount is missing.
+
 Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
 /api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote
 target credentials, so local and remote versions restore identically. Verify
