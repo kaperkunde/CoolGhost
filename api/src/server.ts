@@ -8,6 +8,7 @@ import { dataRouter } from "./routes/data.js"
 import { databasesRouter } from "./routes/databases.js"
 import { provisionRouter } from "./routes/provision.js"
 import { proxyRouter } from "./routes/proxy.js"
+import { storageRouter } from "./routes/storage.js"
 
 const JSON_BODY_LIMIT = "1kb"
 
@@ -20,6 +21,7 @@ app.get("/", (_req, res) => {
     service: "ghosthost-api",
     health: "GET /health",
     provision: "POST /v1/provision/mysql-user",
+    storage: "GET /v1/storage/content",
   })
 })
 
@@ -46,6 +48,7 @@ app.use("/v1/provision", provisionRouter)
 app.use("/v1/databases", databasesRouter)
 app.use("/v1/data", dataRouter)
 app.use("/v1/proxy", proxyRouter)
+app.use("/v1/storage", storageRouter)
 
 if (!config.proxyDynamicDir) {
   console.info(

@@ -186,6 +186,70 @@ because Traefik's file provider shares one namespace across all dynamic files.
 > **Note:** servers deployed before this feature need a one-time redeploy of
 > the `ghosthost-api` stack to pick up the `/proxy-dynamic` mount.
 
+#### Content storage (`/v1/storage/*`)
+
+`GET /v1/storage/content` walks every `<application-uuid>_ghost-content-data`
+volume under `VOLUMES_DIR` (the `/var/lib/docker/volumes` mount the data
+routes already use) and reports the apparent size and file count of each
+blog's Ghost content directory:
+
+```json
+{
+  "ok": true,
+  "volumes": [
+    {
+      "applicationUuid": "abc123",
+      "volumeName": "abc123_ghost-content-data",
+      "sizeBytes": 734003200,
+      "fileCount": 1842,
+      "partial": false
+    }
+  ]
+}
+```
+
+Orphaned volumes (no application any more) are included so the GhostHost
+admin cleanup view can surface them. `partial` is `true` when part of a tree
+could not be read. The route responds 503 when the volumes mount is missing.
+
+`GET /v1/storage/databases` reports every blog database on the shared MySQL
+(`information_schema` data + index length, table count) together with the
+Ghost `site_uuid` setting read from it, which is the key the analytics rows
+carry:
+
+```json
+{ "ok": true, "databases": [ { "name": "demo_plek_je", "sizeBytes": 52428800, "tableCount": 118, "siteUuid": "…" } ] }
+```
+
+`GET /v1/storage/analytics` reports ClickHouse usage: bytes on disk per table
+in `CLICKHOUSE_DATABASE`, and an estimate per `site_uuid` (each table's bytes
+apportioned by the site's share of its rows — the tables are shared, so this
+cannot be exact). Site uuids that no database claims are the orphans. Wiring:
+
+| Variable              | Notes                                                                        |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `CLICKHOUSE_URL`      | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 |
+| `CLICKHOUSE_DATABASE` | Defaults to `ghost_analytics`                                                |
+| `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | Optional; the stock stack uses the passwordless default user |
+
+```json
+{
+  "ok": true,
+  "tables": [ { "name": "analytics_events", "bytesOnDisk": 1048576, "rows": 12000 } ],
+  "sites": [ { "siteUuid": "…", "rows": 9000, "estimatedBytes": 786432 } ]
+}
+```
+
+`DELETE /v1/storage/content/:applicationUuid` removes an orphaned Ghost
+content volume outright (a raw directory removal under `VOLUMES_DIR`, not a
+docker call — only meant for volumes whose application no longer exists).
+`DELETE /v1/storage/analytics/:siteUuid` deletes every analytics row for one
+site uuid across the tables above. Both are idempotent (a resource that is
+already gone still reports success) and are how the GhostHost admin cleanup
+view removes storage that no plekje owns. ClickHouse's `ALTER TABLE ...
+DELETE` is an asynchronous mutation — the call queues it and returns; disk
+space is reclaimed once ClickHouse runs it.
+
 Backup-sourced flows drive the Duplicati REST API (v2.1+ JWT auth: `POST
 /api/v1/auth/login`, filesets, restore tasks). Duplicati holds the remote
 target credentials, so local and remote versions restore identically. Verify

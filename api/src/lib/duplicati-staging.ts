@@ -8,6 +8,7 @@ import {
   tryListDuplicatiDirectory,
   waitForDuplicatiTask,
 } from "./duplicati.js"
+import { UserFacingError } from "./errors.js"
 import {
   dbDumpBackupPath,
   ghostContentVolumeBackupPath,
@@ -34,9 +35,12 @@ function duplicatiPathFor(absStagingPath: string): string {
 
 /**
  * Marker directory in the staging root. A directory rather than a file so it
- * shows up in a folder-only listing too.
+ * shows up in a folder-only listing too. Must not start with "." — Duplicati's
+ * filesystem-browse endpoint silently omits dotfiles/dot-directories from its
+ * listing, which made this check report a shared mount as broken even when
+ * correctly configured (it never saw its own probe entry).
  */
-const MOUNT_PROBE_DIR_NAME = ".coolghost-mount-probe"
+const MOUNT_PROBE_DIR_NAME = "coolghost-mount-probe"
 
 function stagingMountAdvice(): string {
   return (
@@ -191,12 +195,10 @@ export async function stageDuplicatiVersion({
   })
 
   if (!hasVolume) {
-    throw new Error(
+    throw new UserFacingError(
       "This backup version does not contain data for this site. Pick a version taken while the site was deployed.",
     )
   }
-
-  const dumpFileNameForError = path.posix.basename(dumpBackupPath)
 
   const hasDump = await duplicatiVersionContainsPath({
     backupId,
@@ -205,8 +207,8 @@ export async function stageDuplicatiVersion({
   })
 
   if (!hasDump) {
-    throw new Error(
-      `This backup version has the site's files but no database dump (${dumpFileNameForError}). It was likely taken before automatic database dumps covered this site — pick a newer version.`,
+    throw new UserFacingError(
+      "This backup version has the site's files but no database dump. It was likely taken before automatic database dumps covered this site — pick a newer version.",
     )
   }
 

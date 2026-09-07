@@ -3,6 +3,7 @@ import path from "path"
 
 import type { DataJobArtifact, JobHandle } from "./data-jobs.js"
 import { stageDuplicatiVersion } from "./duplicati-staging.js"
+import { UserFacingError } from "./errors.js"
 import {
   dumpDatabaseToFile,
   getGhostSiteMetadata,
@@ -173,7 +174,7 @@ export async function buildCurrentExportArtifact({
   const contentStat = await fs.stat(contentDir).catch(() => null)
 
   if (!contentStat?.isDirectory()) {
-    throw new Error(
+    throw new UserFacingError(
       "The Ghost content volume for this site was not found on the server.",
     )
   }

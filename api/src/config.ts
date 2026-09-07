@@ -48,4 +48,12 @@ export const config = {
   proxyDynamicDir: optionalEnv("PROXY_DYNAMIC_DIR"),
   /** Cert resolver name in the Coolify-generated Traefik config. */
   traefikCertResolver: optionalEnv("TRAEFIK_CERT_RESOLVER") ?? "letsencrypt",
+
+  // Analytics storage reporting. Optional — without CLICKHOUSE_URL the
+  // /v1/storage/analytics route responds 503.
+  /** Shared ClickHouse HTTP interface, e.g. http://clickhouse:8123 */
+  clickhouseUrl: optionalEnv("CLICKHOUSE_URL"),
+  clickhouseDatabase: optionalEnv("CLICKHOUSE_DATABASE") ?? "ghost_analytics",
+  clickhouseUser: optionalEnv("CLICKHOUSE_USER"),
+  clickhousePassword: optionalEnv("CLICKHOUSE_PASSWORD"),
 }

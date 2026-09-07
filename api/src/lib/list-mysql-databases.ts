@@ -2,7 +2,8 @@ import mysql from "mysql2/promise"
 
 import { mysqlConnectionOptions } from "./mysql-connectivity.js"
 
-const EXCLUDED_DATABASES = new Set([
+/** System schemas plus the GhostHost app's own database — never a blog. */
+export const EXCLUDED_DATABASES = new Set([
   "information_schema",
   "mysql",
   "performance_schema",
