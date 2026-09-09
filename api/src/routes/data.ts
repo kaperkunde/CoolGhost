@@ -29,7 +29,12 @@ import {
   StagingUnavailableError,
 } from "../lib/staging.js"
 import {
+  appendRestoreUploadChunk,
+  completeRestoreUpload,
   EmptyUploadError,
+  startRestoreUpload,
+  UploadNotFoundError,
+  UploadOffsetMismatchError,
   UploadTooLargeError,
   writeRestoreUpload,
 } from "../lib/uploads.js"
@@ -70,6 +75,21 @@ function handleError(res: import("express").Response, error: unknown): void {
     return
   }
 
+  if (error instanceof EmptyUploadError) {
+    res.status(400).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof UploadNotFoundError) {
+    res.status(404).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof UploadOffsetMismatchError) {
+    res.status(409).json({ error: error.message, sizeBytes: error.sizeBytes })
+    return
+  }
+
   if (error instanceof DuplicatiError) {
     console.error("Duplicati request failed", { error })
     res.status(502).json({ error: "Could not reach the backup service." })
@@ -102,10 +122,7 @@ function parseTarget(spotIdParam: string, body: SpotDataBody) {
   }
 }
 
-function requireString(
-  value: unknown,
-  label: string,
-): string {
+function requireString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Invalid ${label}`)
   }
@@ -122,12 +139,18 @@ const FILESET_RETRY_DELAY_MS = 1500
  */
 async function listFilesetsWithRetry(backupId: string) {
   try {
-    return { versions: await listDuplicatiFilesets(backupId), versionsError: null }
+    return {
+      versions: await listDuplicatiFilesets(backupId),
+      versionsError: null,
+    }
   } catch (firstError) {
     await new Promise((resolve) => setTimeout(resolve, FILESET_RETRY_DELAY_MS))
 
     try {
-      return { versions: await listDuplicatiFilesets(backupId), versionsError: null }
+      return {
+        versions: await listDuplicatiFilesets(backupId),
+        versionsError: null,
+      }
     } catch (error) {
       console.error("Failed to list Duplicati filesets", {
         backupId,
@@ -261,7 +284,9 @@ dataRouter.get("/spots/:spotId/artifact/download", async (req, res) => {
     const artifact = await readArtifactSidecar(spotId)
 
     if (!artifact) {
-      res.status(404).json({ error: "No export artifact exists for this spot." })
+      res
+        .status(404)
+        .json({ error: "No export artifact exists for this spot." })
       return
     }
 
@@ -273,7 +298,9 @@ dataRouter.get("/spots/:spotId/artifact/download", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`)
     res.setHeader("Cache-Control", "no-store")
 
-    const stream = createReadStream(resolveStagingRelativePath(artifact.relPath))
+    const stream = createReadStream(
+      resolveStagingRelativePath(artifact.relPath),
+    )
 
     stream.on("error", (error) => {
       console.error("Artifact stream failed", { spotId, error })
@@ -291,15 +318,20 @@ dataRouter.get("/spots/:spotId/artifact/download", async (req, res) => {
 })
 
 /**
- * Receive a restore archive as the raw request body. The returned
- * uploadRelPath is passed back as the `upload` restore source.
+ * Receive a restore archive as the raw request body, in one request. The
+ * returned uploadRelPath is passed back as the `upload` restore source.
+ * Only workable when the whole body arrives inside every proxy's request
+ * timeout — the session routes below are the general case.
  */
 dataRouter.post("/spots/:spotId/uploads", async (req, res) => {
   try {
     const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
     const declaredLength = Number(req.header("content-length") ?? "")
 
-    if (Number.isFinite(declaredLength) && declaredLength > config.maxUploadBytes) {
+    if (
+      Number.isFinite(declaredLength) &&
+      declaredLength > config.maxUploadBytes
+    ) {
       throw new UploadTooLargeError()
     }
 
@@ -307,14 +339,80 @@ dataRouter.post("/spots/:spotId/uploads", async (req, res) => {
 
     res.json({ ok: true, ...upload })
   } catch (error) {
-    if (error instanceof EmptyUploadError) {
-      res.status(400).json({ error: error.message })
-      return
-    }
-
     handleError(res, error)
   }
 })
+
+/**
+ * Chunked restore upload. One request per chunk keeps every hop — browser to
+ * app, app to this api — inside the proxies' request-read timeout (Traefik's
+ * default is 60s for the whole request, body included, which a single-request
+ * upload of a real archive over a home uplink cannot meet: it dies with a
+ * 499). Start a session, PUT chunks at increasing offsets, then complete it;
+ * the returned uploadRelPath is the `upload` restore source.
+ */
+dataRouter.post("/spots/:spotId/uploads/sessions", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+
+    res
+      .status(201)
+      .json({ ok: true, ...(await startRestoreUpload({ spotId })) })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+/** Append the raw request body at `offset`; 409 (with sizeBytes) when the file is elsewhere. */
+dataRouter.put("/spots/:spotId/uploads/sessions/data", async (req, res) => {
+  try {
+    const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const uploadRelPath = requireString(req.query["upload"], "upload path")
+    const offset = Number(req.query["offset"])
+
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new Error("Invalid offset")
+    }
+
+    const declaredLength = Number(req.header("content-length") ?? "")
+
+    if (
+      Number.isFinite(declaredLength) &&
+      offset + declaredLength > config.maxUploadBytes
+    ) {
+      throw new UploadTooLargeError()
+    }
+
+    const appended = await appendRestoreUploadChunk({
+      spotId,
+      uploadRelPath,
+      offset,
+      body: req,
+    })
+
+    res.json({ ok: true, ...appended })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+dataRouter.post(
+  "/spots/:spotId/uploads/sessions/complete",
+  async (req, res) => {
+    try {
+      const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+      const body = (req.body ?? {}) as { uploadRelPath?: unknown }
+      const uploadRelPath = requireString(body.uploadRelPath, "upload path")
+
+      res.json({
+        ok: true,
+        ...(await completeRestoreUpload({ spotId, uploadRelPath })),
+      })
+    } catch (error) {
+      handleError(res, error)
+    }
+  },
+)
 
 dataRouter.get("/jobs/:jobId", (req, res) => {
   const job = getDataJob(String(req.params["jobId"]))
