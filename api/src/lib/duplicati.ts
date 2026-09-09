@@ -447,6 +447,12 @@ export async function tryListDuplicatiDirectory(
  * duplicati container — use the shared staging mount so this service can read
  * the result). Directory paths should end with "/" — a "*" is appended so the
  * filter matches their contents recursively.
+ *
+ * The body is Duplicati's RestoreInputDto, whose fields are snake_case
+ * (`restore_path`, `skip_metadata`). The server drops keys it does not know
+ * without complaint, and a restore with no `restore_path` goes to the files'
+ * ORIGINAL locations — the live content volume and dump directory — so the
+ * spelling here is load-bearing.
  */
 export async function startDuplicatiRestore({
   backupId,
@@ -468,7 +474,7 @@ export async function startDuplicatiRestore({
       body: JSON.stringify({
         paths: filterPaths,
         time,
-        "restore-path": targetPath,
+        restore_path: targetPath,
         overwrite: true,
         permissions: false,
         skip_metadata: true,
