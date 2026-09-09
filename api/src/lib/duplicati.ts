@@ -359,6 +359,35 @@ export async function duplicatiVersionContainsPath({
 }
 
 /**
+ * Look a field up by name, ignoring key casing. The folder browser answers in
+ * the web UI's own casing ("text"/"id") while the endpoints around it use
+ * PascalCase ("Files"/"Path"), and which one a given release sends is not
+ * something this client should depend on.
+ */
+function fieldOf(value: unknown, ...names: string[]): unknown {
+  if (typeof value !== "object" || value === null) {
+    return undefined
+  }
+
+  const byLowerName = new Map(
+    Object.entries(value as Record<string, unknown>).map(([key, field]) => [
+      key.toLowerCase(),
+      field,
+    ]),
+  )
+
+  for (const name of names) {
+    const field = byLowerName.get(name.toLowerCase())
+
+    if (field !== undefined) {
+      return field
+    }
+  }
+
+  return undefined
+}
+
+/**
  * List a directory as the *duplicati container* sees it, via the web
  * service's folder-browser endpoint.
  *
@@ -385,27 +414,32 @@ export async function tryListDuplicatiDirectory(
     return null
   }
 
+  const wrapped = fieldOf(payload, "Files")
   const entries = Array.isArray(payload)
     ? payload
-    : Array.isArray((payload as { Files?: unknown })?.Files)
-      ? (payload as { Files: unknown[] }).Files
+    : Array.isArray(wrapped)
+      ? wrapped
       : null
 
   if (!entries) {
     return null
   }
 
-  return entries.flatMap((entry) => {
-    const record = entry as { Path?: unknown; Text?: unknown }
-    const name =
-      typeof record?.Text === "string"
-        ? record.Text
-        : typeof record?.Path === "string"
-          ? record.Path
-          : null
+  const names = entries.flatMap((entry) => {
+    // 2.3.x names each entry with "text" and gives its full path as "id";
+    // older releases used "Text"/"Path".
+    const name = fieldOf(entry, "Text", "Path", "Id")
 
-    return name ? [name] : []
+    return typeof name === "string" && name ? [name] : []
   })
+
+  // Entries came back but none carried a name this client understands — an
+  // answer it cannot read, which is "cannot tell", not "not there".
+  if (entries.length > 0 && names.length === 0) {
+    return null
+  }
+
+  return names
 }
 
 /**
