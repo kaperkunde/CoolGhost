@@ -10,6 +10,12 @@ import { jobsDir } from "./staging.js"
  * <staging>/jobs/<id>/job.json so a service restart doesn't lose history —
  * jobs that were still running at boot are marked failed (their worker died
  * with the process).
+ *
+ * A job can be cancelled until it starts overwriting live data: cancelling
+ * aborts the job's signal, which kills whatever child process or wait the
+ * worker is in, and the job ends failed with `cancelled: true`. Once
+ * `mutationStarted` is set a cancel is refused — stopping a restore halfway
+ * through the volume or the database would leave the site broken.
  */
 
 export type DataJobKind = "export" | "restore"
@@ -45,6 +51,8 @@ export type DataJob = {
    * before this point the site is untouched and can simply be started again.
    */
   mutationStarted: boolean
+  /** Ended by a cancel request rather than by finishing or failing. */
+  cancelled: boolean
   warnings: string[]
   error: string | null
   artifact: DataJobArtifact | null
@@ -53,6 +61,7 @@ export type DataJob = {
 }
 
 const jobs = new Map<string, DataJob>()
+const controllers = new Map<string, AbortController>()
 
 function jobDirFor(jobId: string): string {
   return path.join(jobsDir(), jobId)
@@ -72,9 +81,17 @@ export function getDataJob(jobId: string): DataJob | null {
   return jobs.get(jobId) ?? null
 }
 
+/**
+ * The spot's running job, if any. A cancelled job counts until its worker has
+ * finished unwinding, so a new job cannot race the old one's cleanup.
+ */
 export function activeJobForSpot(spotId: string): DataJob | null {
   for (const job of jobs.values()) {
-    if (job.spotId === spotId && job.phase !== "done" && job.phase !== "failed") {
+    if (
+      job.spotId === spotId &&
+      ((job.phase !== "done" && job.phase !== "failed") ||
+        controllers.has(job.id))
+    ) {
       return job
     }
   }
@@ -82,10 +99,36 @@ export function activeJobForSpot(spotId: string): DataJob | null {
   return null
 }
 
+/** A job for the same spot is still running; `activeJob` says which. */
 export class JobConflictError extends Error {
-  constructor(spotId: string) {
-    super(`Another export or restore is already running for ${spotId}.`)
+  readonly activeJob: DataJob
+
+  constructor(activeJob: DataJob) {
+    super(
+      activeJob.kind === "restore"
+        ? "A restore is already running for this site."
+        : "An export is already running for this site.",
+    )
     this.name = "JobConflictError"
+    this.activeJob = activeJob
+  }
+}
+
+/** Thrown inside a worker once its job has been cancelled. */
+export class JobCancelledError extends Error {
+  constructor() {
+    super("Cancelled.")
+    this.name = "JobCancelledError"
+  }
+}
+
+/** The job has started overwriting live data and can no longer be cancelled. */
+export class JobNotCancellableError extends Error {
+  constructor() {
+    super(
+      "The restore is already writing the site's data and can't be stopped safely.",
+    )
+    this.name = "JobNotCancellableError"
   }
 }
 
@@ -93,6 +136,8 @@ export type JobHandle = {
   job: DataJob
   /** Work dir for this job under the staging mount. */
   workDir: string
+  /** Aborted when the job is cancelled; pass it to child processes and waits. */
+  signal: AbortSignal
   setPhase: (phase: ExportJobPhase | RestoreJobPhase) => Promise<void>
   markMutationStarted: () => Promise<void>
   addWarning: (warning: string) => Promise<void>
@@ -112,8 +157,10 @@ export async function startDataJob({
   spotId: string
   worker: (handle: JobHandle) => Promise<void>
 }): Promise<DataJob> {
-  if (activeJobForSpot(spotId)) {
-    throw new JobConflictError(spotId)
+  const active = activeJobForSpot(spotId)
+
+  if (active) {
+    throw new JobConflictError(active)
   }
 
   const now = new Date().toISOString()
@@ -123,6 +170,7 @@ export async function startDataJob({
     spotId,
     phase: "pending",
     mutationStarted: false,
+    cancelled: false,
     warnings: [],
     error: null,
     artifact: null,
@@ -130,7 +178,9 @@ export async function startDataJob({
     updatedAt: now,
   }
 
+  const controller = new AbortController()
   jobs.set(job.id, job)
+  controllers.set(job.id, controller)
   await persist(job)
 
   const touch = async () => {
@@ -138,14 +188,27 @@ export async function startDataJob({
     await persist(job)
   }
 
+  const throwIfCancelled = () => {
+    if (controller.signal.aborted) {
+      throw new JobCancelledError()
+    }
+  }
+
   const handle: JobHandle = {
     job,
     workDir: jobDirFor(job.id),
+    signal: controller.signal,
+    // Every phase change is a cancellation point, so a worker that is
+    // between steps when the cancel lands stops at the next one.
     setPhase: async (phase) => {
+      throwIfCancelled()
       job.phase = phase
       await touch()
     },
+    // Check and set in the same tick: cancelDataJob reads mutationStarted
+    // synchronously too, so exactly one of them wins.
     markMutationStarted: async () => {
+      throwIfCancelled()
       job.mutationStarted = true
       await touch()
     },
@@ -161,12 +224,18 @@ export async function startDataJob({
 
   void worker(handle)
     .then(async () => {
+      // A cancel that landed after the last cancellation point has already
+      // ended the job; the worker finishing its tail does not undo that.
       if (job.phase !== "failed") {
         job.phase = "done"
         await touch()
       }
     })
     .catch(async (error: unknown) => {
+      if (job.cancelled) {
+        return
+      }
+
       console.error("Data job failed", { jobId: job.id, kind, spotId, error })
       job.phase = "failed"
       job.error =
@@ -175,6 +244,40 @@ export async function startDataJob({
           : `Something went wrong while ${kind === "export" ? "exporting" : "restoring"} this site's data. Contact support if this keeps happening.`
       await touch()
     })
+    .finally(() => {
+      controllers.delete(job.id)
+    })
+
+  return job
+}
+
+/**
+ * Cancel a running job. The job ends at once — failed, `cancelled: true` —
+ * so the spot is free for a new job, and its worker is aborted and unwinds
+ * in the background (its cleanup only touches the job's own work dir).
+ * Terminal jobs are returned unchanged; unknown ids return null.
+ */
+export async function cancelDataJob(jobId: string): Promise<DataJob | null> {
+  const job = jobs.get(jobId)
+
+  if (!job) {
+    return null
+  }
+
+  if (job.phase === "done" || job.phase === "failed") {
+    return job
+  }
+
+  if (job.mutationStarted) {
+    throw new JobNotCancellableError()
+  }
+
+  job.cancelled = true
+  job.phase = "failed"
+  job.error = "Cancelled."
+  job.updatedAt = new Date().toISOString()
+  controllers.get(jobId)?.abort(new JobCancelledError())
+  await persist(job)
 
   return job
 }
@@ -200,6 +303,9 @@ export async function loadPersistedJobs(): Promise<void> {
       if (!job.id || jobs.has(job.id)) {
         continue
       }
+
+      // Jobs persisted before cancelling existed.
+      job.cancelled ??= false
 
       if (job.phase !== "done" && job.phase !== "failed") {
         job.phase = "failed"

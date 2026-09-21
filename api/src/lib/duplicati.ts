@@ -521,18 +521,46 @@ export async function getDuplicatiTask(
   }
 }
 
+/**
+ * Ask Duplicati to abort a running task. Best effort: a task that already
+ * finished answers 404, and a failure here must not mask why we aborted.
+ */
+export async function abortDuplicatiTask(taskId: number): Promise<void> {
+  try {
+    await duplicatiFetch(`/api/v1/task/${taskId}/abort`, { method: "POST" })
+  } catch (error) {
+    console.warn("Could not abort Duplicati task", { taskId, error })
+  }
+}
+
 const RESTORE_POLL_INTERVAL_MS = 2000
 
+/**
+ * Poll a Duplicati task until it completes. When `signal` aborts (a cancelled
+ * job), the task is aborted in Duplicati too and the wait rejects with the
+ * signal's reason.
+ */
 export async function waitForDuplicatiTask({
   taskId,
   timeoutMs,
+  signal,
 }: {
   taskId: number
   timeoutMs: number
+  signal?: AbortSignal
 }): Promise<void> {
   const deadline = Date.now() + timeoutMs
 
+  const stopIfAborted = async () => {
+    if (signal?.aborted) {
+      await abortDuplicatiTask(taskId)
+      throw signal.reason
+    }
+  }
+
   for (;;) {
+    await stopIfAborted()
+
     const task = await getDuplicatiTask(taskId)
 
     if (task.status === "completed") {
@@ -553,8 +581,16 @@ export async function waitForDuplicatiTask({
       )
     }
 
-    await new Promise((resolve) =>
-      setTimeout(resolve, RESTORE_POLL_INTERVAL_MS),
-    )
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(done, RESTORE_POLL_INTERVAL_MS)
+
+      function done() {
+        clearTimeout(timer)
+        signal?.removeEventListener("abort", done)
+        resolve()
+      }
+
+      signal?.addEventListener("abort", done, { once: true })
+    })
   }
 }

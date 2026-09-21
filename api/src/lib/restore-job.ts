@@ -112,12 +112,14 @@ export async function runRestoreJob({
         applicationUuid: target.applicationUuid,
         database: target.database,
         targetDir: restoreDir,
+        signal: handle.signal,
       })
 
       const dbSqlPath = path.join(handle.workDir, "db.sql")
       await gunzipFile({
         sourcePath: restored.dbDumpGzPath,
         destPath: dbSqlPath,
+        signal: handle.signal,
       })
 
       staged = { contentDir: restored.contentDir, dbSqlPath, info: null }
@@ -128,19 +130,21 @@ export async function runRestoreJob({
       target,
       workDir: snapshotWorkDir,
       source: { type: "pre-restore-snapshot" },
+      signal: handle.signal,
     })
 
     await handle.setPhase("validating")
     const warnings = await validateStagedRestore({
       staged,
       expectedSpotId: target.spotId,
-      expectedDatabase: target.database,
     })
 
     for (const warning of warnings) {
       await handle.addWarning(warning)
     }
 
+    // Last cancellation point. From here on nothing gets the abort signal:
+    // the volume and database writes must run to the end once begun.
     await handle.setPhase("applying_files")
     await handle.markMutationStarted()
     await replaceVolumeContents({
