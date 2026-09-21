@@ -15,6 +15,17 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 | Traefik routes | `traefik.coolghost.yaml`        | Once per server (see below) |
 | Ghost site     | `docker-compose.yaml`           | One per blog                |
 
+## Server requirements
+
+The shared stack idles at roughly 1 GB (ClickHouse ~160 MB, traffic-analytics ~250 MB, MySQL ~135 MB, Duplicati ~130–500 MB, plus the api and proxy), and each Ghost site adds ~150–200 MB. Plan on **4 GB RAM**, or **2 GB with swap**, before the first site.
+
+Cloud images usually ship without swap, and with none a memory spike ends in the kernel OOM killer taking out MySQL or ClickHouse; after enough restarts Coolify stops the stack for good. Add a swap file once per server:
+
+```bash
+fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
 ## Coolify setup
 
 Deploy each compose file as a separate Coolify Docker Compose resource.

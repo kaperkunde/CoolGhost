@@ -1,0 +1,52 @@
+<!--
+  Size ClickHouse for a small, single-node analytics store that shares its
+  host with MySQL, Ghost and the rest of the stack. The stock image is tuned
+  for a dedicated machine: on a 2 GB server with no swap it was OOM-killed
+  in a loop, together with MySQL, until Coolify stopped the stack.
+
+  Measured idle on 2 CPUs (24.8): 668 threads / 527 MB anonymous memory stock,
+  87 threads / 158 MB with this file and users.d/low-memory.xml.
+  Recipe: https://kb.altinity.com/altinity-kb-setup-and-maintenance/configure_clickhouse_for_low_mem_envs/
+-->
+<clickhouse>
+    <!-- Default 5 GB / 8 GB caches; ours hold a few small MergeTree tables. -->
+    <mark_cache_size>67108864</mark_cache_size>
+    <index_mark_cache_size>16777216</index_mark_cache_size>
+    <uncompressed_cache_size>16777216</uncompressed_cache_size>
+    <mlock_executable>false</mlock_executable>
+
+    <max_concurrent_queries>16</max_concurrent_queries>
+    <max_connections>64</max_connections>
+
+    <!-- 512 idle threads by default, the bulk of the stock footprint. The
+         other schedule pools serve replication, Kafka, Distributed and Buffer
+         tables, none of which this stack uses. background_pool_size stays at
+         its default: merge-tree sanity checks refuse to start below it. -->
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+    <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
+    <background_fetches_pool_size>1</background_fetches_pool_size>
+    <background_move_pool_size>1</background_move_pool_size>
+
+    <mysql_port remove="1" />
+    <postgresql_port remove="1" />
+
+    <!-- Server-introspection log tables: each flushes on its own thread and
+         grows on disk. Nothing in the stack reads them. -->
+    <query_log remove="1" />
+    <trace_log remove="1" />
+    <query_thread_log remove="1" />
+    <query_views_log remove="1" />
+    <part_log remove="1" />
+    <text_log remove="1" />
+    <metric_log remove="1" />
+    <error_log remove="1" />
+    <asynchronous_metric_log remove="1" />
+    <opentelemetry_span_log remove="1" />
+    <processors_profile_log remove="1" />
+    <asynchronous_insert_log remove="1" />
+    <backup_log remove="1" />
+    <s3queue_log remove="1" />
+    <blob_storage_log remove="1" />
+</clickhouse>
