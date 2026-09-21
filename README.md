@@ -15,6 +15,17 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 | Traefik routes | `traefik.coolghost.yaml`        | Once per server (see below) |
 | Ghost site     | `docker-compose.yaml`           | One per blog                |
 
+## Server requirements
+
+The shared stack idles at roughly 1 GB (ClickHouse ~160 MB, traffic-analytics ~250 MB, MySQL ~135 MB, Duplicati ~130–500 MB, plus the api and proxy), and each Ghost site adds ~150–200 MB. Plan on **4 GB RAM**, or **2 GB with swap**, before the first site.
+
+Cloud images usually ship without swap, and with none a memory spike ends in the kernel OOM killer taking out MySQL or ClickHouse; after enough restarts Coolify stops the stack for good. Add a swap file once per server:
+
+```bash
+fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
 ## Coolify setup
 
 Deploy each compose file as a separate Coolify Docker Compose resource.
@@ -103,16 +114,16 @@ The API also executes blog exports and restores on behalf of GhostHost. This
 requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 `docker-compose.api.yaml` carries the same wiring with overridable defaults):
 
-| Variable / mount                      | Notes                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `/var/lib/docker/volumes:/local/volumes` | Read/write access to each blog's `ghost-content-data` volume                             |
-| `${STAGING_HOST_DIR}:/staging`        | Export artifacts, restore uploads, job state. Mount the same host dir into duplicati; nothing else needs it |
-| `STAGING_DIR`                         | In-container staging path (`/staging`)                                                      |
-| `DUPLICATI_URL` / `DUPLICATI_PASSWORD` | Duplicati web service (e.g. `http://duplicati:8200`) + `SERVICE_PASSWORD_DUPLICATI`        |
-| `DUPLICATI_STAGING_DIR`               | Staging path as seen inside the duplicati container (defaults to `STAGING_DIR`)             |
-| `ARTIFACT_TTL_HOURS`                  | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)           |
-| `MAX_UPLOAD_BYTES`                    | Optional; largest restore archive accepted by the uploads route (default 4 GiB)             |
-| `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                          |
+| Variable / mount                          | Notes                                                                                                       |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `/var/lib/docker/volumes:/local/volumes`  | Read/write access to each blog's `ghost-content-data` volume                                                |
+| `${STAGING_HOST_DIR}:/staging`            | Export artifacts, restore uploads, job state. Mount the same host dir into duplicati; nothing else needs it |
+| `STAGING_DIR`                             | In-container staging path (`/staging`)                                                                      |
+| `DUPLICATI_URL` / `DUPLICATI_PASSWORD`    | Duplicati web service (e.g. `http://duplicati:8200`) + `SERVICE_PASSWORD_DUPLICATI`                         |
+| `DUPLICATI_STAGING_DIR`                   | Staging path as seen inside the duplicati container (defaults to `STAGING_DIR`)                             |
+| `ARTIFACT_TTL_HOURS`                      | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)                           |
+| `MAX_UPLOAD_BYTES`                        | Optional; largest restore archive accepted by the uploads route (default 4 GiB)                             |
+| `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                                              |
 
 Endpoints (all require the bearer token): `GET /v1/data/backups` lists
 Duplicati jobs and their restorable versions (a job whose versions could not
@@ -121,9 +132,18 @@ and `POST /v1/data/spots/:spot/restore` start async jobs polled via
 `GET /v1/data/jobs/:id`. Exports package `info.json` + `db.sql` + `content/`
 into one `.tar.gz` under `staging/artifacts/`, described by
 `GET /v1/data/spots/:spot/artifact` and streamed by
-`GET /v1/data/spots/:spot/artifact/download`. Restore archives are received
-as a raw request body by `POST /v1/data/spots/:spot/uploads`, which returns
-the `uploadRelPath` to pass as the `upload` restore source. Restores expect
+`GET /v1/data/spots/:spot/artifact/download`. Restore archives arrive as a
+chunked session: `POST /v1/data/spots/:spot/uploads/sessions` opens one,
+`PUT /v1/data/spots/:spot/uploads/sessions/data?upload=<uploadRelPath>&offset=<n>`
+appends the raw request body (409 with the real `sizeBytes` when the offset
+is not where the file ends), and
+`POST /v1/data/spots/:spot/uploads/sessions/complete` (`{ "uploadRelPath" }`)
+finalizes it, returning the `uploadRelPath` to pass as the `upload` restore
+source. Each chunk is its own short request, so no hop has to hold a
+multi-minute upload open — Traefik's default request-read timeout is 60s
+for the whole request, body included, and a large archive sent in one
+`POST /v1/data/spots/:spot/uploads` (still supported) dies there with a
+499 on any ordinary uplink. Restores expect
 the caller to stop the Ghost container first, snapshot current data as an
 undo artifact, then replace the content volume and re-import the database.
 When `STAGING_DIR` or the Duplicati env is missing the routes degrade
@@ -154,7 +174,7 @@ they are the two halves of one hand-off. Coolify keeps environment variables
 per resource, so `STAGING_HOST_DIR` set on only one of them leaves each
 container with its own private `/staging` — Duplicati then restores into a
 directory the api cannot see, and every backup-sourced export fails with
-*"Duplicati reported the restore finished, but nothing appeared in …"*. Set
+_"Duplicati reported the restore finished, but nothing appeared in …"_. Set
 `STAGING_HOST_DIR` to the same value on the api and duplicati resources (or
 leave it unset on both, so both take the `/root/data/ghosthost-staging`
 default), and set the api's `DUPLICATI_STAGING_DIR` to the path duplicati has
@@ -172,11 +192,11 @@ file-provider directory so extra addresses 301 to a blog's canonical domain,
 with Let's Encrypt certificates issued through the proxy's standard
 `letsencrypt` resolver. Wiring (in `docker-compose.api.yaml`):
 
-| Variable / mount                                    | Notes                                                              |
-| --------------------------------------------------- | ------------------------------------------------------------------ |
-| `${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic` | Coolify's Traefik dynamic-config dir; hot-reloaded |
-| `PROXY_DYNAMIC_DIR`                                 | In-container path (`/proxy-dynamic`); unset ⇒ routes respond 503   |
-| `TRAEFIK_CERT_RESOLVER`                             | Optional; resolver name in the generated proxy config (default `letsencrypt`) |
+| Variable / mount                                                        | Notes                                                                         |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `${PROXY_DYNAMIC_HOST_DIR:-/data/coolify/proxy/dynamic}:/proxy-dynamic` | Coolify's Traefik dynamic-config dir; hot-reloaded                            |
+| `PROXY_DYNAMIC_DIR`                                                     | In-container path (`/proxy-dynamic`); unset ⇒ routes respond 503              |
+| `TRAEFIK_CERT_RESOLVER`                                                 | Optional; resolver name in the generated proxy config (default `letsencrypt`) |
 
 `PUT /v1/proxy/redirects/:key` with `{ "redirectDomain": "...", "targetDomain": "..." }`
 writes `plekje-redirect-<key>.yaml` atomically; `DELETE /v1/proxy/redirects/:key`
@@ -218,7 +238,17 @@ Ghost `site_uuid` setting read from it, which is the key the analytics rows
 carry:
 
 ```json
-{ "ok": true, "databases": [ { "name": "demo_plek_je", "sizeBytes": 52428800, "tableCount": 118, "siteUuid": "…" } ] }
+{
+  "ok": true,
+  "databases": [
+    {
+      "name": "demo_plek_je",
+      "sizeBytes": 52428800,
+      "tableCount": 118,
+      "siteUuid": "…"
+    }
+  ]
+}
 ```
 
 `GET /v1/storage/analytics` reports ClickHouse usage: bytes on disk per table
@@ -226,17 +256,19 @@ in `CLICKHOUSE_DATABASE`, and an estimate per `site_uuid` (each table's bytes
 apportioned by the site's share of its rows — the tables are shared, so this
 cannot be exact). Site uuids that no database claims are the orphans. Wiring:
 
-| Variable              | Notes                                                                        |
-| --------------------- | ---------------------------------------------------------------------------- |
-| `CLICKHOUSE_URL`      | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 |
-| `CLICKHOUSE_DATABASE` | Defaults to `ghost_analytics`                                                |
-| `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | Optional; the stock stack uses the passwordless default user |
+| Variable                                  | Notes                                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------------------ |
+| `CLICKHOUSE_URL`                          | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 |
+| `CLICKHOUSE_DATABASE`                     | Defaults to `ghost_analytics`                                                  |
+| `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | Optional; the stock stack uses the passwordless default user                   |
 
 ```json
 {
   "ok": true,
-  "tables": [ { "name": "analytics_events", "bytesOnDisk": 1048576, "rows": 12000 } ],
-  "sites": [ { "siteUuid": "…", "rows": 9000, "estimatedBytes": 786432 } ]
+  "tables": [
+    { "name": "analytics_events", "bytesOnDisk": 1048576, "rows": 12000 }
+  ],
+  "sites": [{ "siteUuid": "…", "rows": 9000, "estimatedBytes": 786432 }]
 }
 ```
 
@@ -262,10 +294,10 @@ The `duplicati` image builds from `./duplicati` and provisions its own backup
 jobs the first time it starts, so a fresh Coolify deploy comes up ready for the
 API's backup, export and restore flows with nothing to click:
 
-| Job                | Schedule           | Retention | Destination            | Sources                                            |
-| ------------------ | ------------------ | --------- | ---------------------- | -------------------------------------------------- |
-| `CoolGhost Hourly` | every hour         | 24 hours  | `file:///backups/hourly` | `/local/volumes/`, `/data/db_dumps/`             |
-| `CoolGhost Daily`  | daily at 03:30     | 15 days   | `file:///backups/daily`  | the above plus `/data/coolify/`                  |
+| Job                | Schedule       | Retention | Destination              | Sources                              |
+| ------------------ | -------------- | --------- | ------------------------ | ------------------------------------ |
+| `CoolGhost Hourly` | every hour     | 24 hours  | `file:///backups/hourly` | `/local/volumes/`, `/data/db_dumps/` |
+| `CoolGhost Daily`  | daily at 03:30 | 15 days   | `file:///backups/daily`  | the above plus `/data/coolify/`      |
 
 Both run `--run-script-before=/usr/local/bin/pre-backup.sh`, so every snapshot
 contains a fresh `gzip`ped `mysqldump` of each site database taken alongside the
@@ -298,19 +330,19 @@ credentials, so remote versions restore through the API exactly like local ones.
 
 Overridable environment (all optional):
 
-| Variable                                              | Default                            | Notes                                                     |
-| ----------------------------------------------------- | ---------------------------------- | --------------------------------------------------------- |
-| `DUPLICATI_BOOTSTRAP_ENABLED`                         | `true`                             | `false` to configure jobs by hand in the web UI instead    |
-| `DUPLICATI_BACKUP_PASSPHRASE`                         | `SERVICE_PASSWORD_ENCRYPT`         | Encryption passphrase; empty creates unencrypted backups   |
-| `DUPLICATI_DAILY_TARGET_URL`                          | `file:///backups/daily`            | Any Duplicati backend URL — set this for off-host copies   |
-| `DUPLICATI_HOURLY_TARGET_URL`                         | `file:///backups/hourly`           |                                                            |
-| `DUPLICATI_DAILY_AT`                                  | `03:30`                            | Wall-clock time in the container `TZ`                      |
-| `DUPLICATI_HOURLY_KEEP_TIME` / `DUPLICATI_DAILY_KEEP_TIME` | `24h` / `15D`                 | Duplicati timespans (`h` hours, `D` days — `m` is minutes) |
-| `DUPLICATI_HOURLY_REPEAT` / `DUPLICATI_DAILY_REPEAT`  | `1h` / `1D`                        | Must be longer than 5 minutes                              |
-| `DUPLICATI_HOURLY_SOURCES` / `DUPLICATI_DAILY_SOURCES` | see table above                   | Colon-separated absolute paths inside the container        |
-| `DUPLICATI_BOOTSTRAP_EXCLUDES`                        | live DB dirs, `backingFsBlockDev`  | Colon-separated Duplicati filter expressions               |
-| `DUPLICATI_BOOTSTRAP_RUN_NOW`                         | `true`                             | `false` to skip the initial hourly run                     |
-| `DUPLICATI_HOURLY_NAME` / `DUPLICATI_DAILY_NAME`      | `CoolGhost Hourly` / `... Daily`   | Names are what the bootstrap matches on                    |
+| Variable                                                   | Default                           | Notes                                                      |
+| ---------------------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
+| `DUPLICATI_BOOTSTRAP_ENABLED`                              | `true`                            | `false` to configure jobs by hand in the web UI instead    |
+| `DUPLICATI_BACKUP_PASSPHRASE`                              | `SERVICE_PASSWORD_ENCRYPT`        | Encryption passphrase; empty creates unencrypted backups   |
+| `DUPLICATI_DAILY_TARGET_URL`                               | `file:///backups/daily`           | Any Duplicati backend URL — set this for off-host copies   |
+| `DUPLICATI_HOURLY_TARGET_URL`                              | `file:///backups/hourly`          |                                                            |
+| `DUPLICATI_DAILY_AT`                                       | `03:30`                           | Wall-clock time in the container `TZ`                      |
+| `DUPLICATI_HOURLY_KEEP_TIME` / `DUPLICATI_DAILY_KEEP_TIME` | `24h` / `15D`                     | Duplicati timespans (`h` hours, `D` days — `m` is minutes) |
+| `DUPLICATI_HOURLY_REPEAT` / `DUPLICATI_DAILY_REPEAT`       | `1h` / `1D`                       | Must be longer than 5 minutes                              |
+| `DUPLICATI_HOURLY_SOURCES` / `DUPLICATI_DAILY_SOURCES`     | see table above                   | Colon-separated absolute paths inside the container        |
+| `DUPLICATI_BOOTSTRAP_EXCLUDES`                             | live DB dirs, `backingFsBlockDev` | Colon-separated Duplicati filter expressions               |
+| `DUPLICATI_BOOTSTRAP_RUN_NOW`                              | `true`                            | `false` to skip the initial hourly run                     |
+| `DUPLICATI_HOURLY_NAME` / `DUPLICATI_DAILY_NAME`           | `CoolGhost Hourly` / `... Daily`  | Names are what the bootstrap matches on                    |
 
 If you configure jobs by hand instead, keep the same contract: include
 `/local/volumes` and `/data/db_dumps` in the sources and run
