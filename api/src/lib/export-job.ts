@@ -96,6 +96,7 @@ async function writeArtifact({
   contentDir,
   source,
   siteMetadataDatabase,
+  signal,
 }: {
   target: SpotDataTarget
   workDir: string
@@ -103,6 +104,7 @@ async function writeArtifact({
   source: SpotArchiveInfo["source"]
   /** When set, siteTitle/ghost version are read live from this database. */
   siteMetadataDatabase: string | null
+  signal?: AbortSignal
 }): Promise<DataJobArtifact> {
   const now = new Date()
 
@@ -130,7 +132,7 @@ async function writeArtifact({
   const artifactPath = artifactPathForSpot(target.spotId)
   await fs.rm(artifactPath, { force: true })
 
-  await packageSpotArchive({ workDir, contentDir, artifactPath })
+  await packageSpotArchive({ workDir, contentDir, artifactPath, signal })
 
   const stat = await fs.stat(artifactPath)
 
@@ -160,6 +162,7 @@ export async function buildCurrentExportArtifact({
   target,
   workDir,
   source,
+  signal,
 }: {
   target: SpotDataTarget
   workDir: string
@@ -167,6 +170,8 @@ export async function buildCurrentExportArtifact({
     SpotArchiveInfo["source"],
     { type: "current" } | { type: "pre-restore-snapshot" }
   >
+  /** Aborts the dump and packaging (a cancelled job). */
+  signal?: AbortSignal
 }): Promise<DataJobArtifact> {
   await fs.mkdir(workDir, { recursive: true })
 
@@ -182,6 +187,7 @@ export async function buildCurrentExportArtifact({
   await dumpDatabaseToFile({
     database: target.database,
     destPath: path.join(workDir, "db.sql"),
+    signal,
   })
 
   return writeArtifact({
@@ -190,6 +196,7 @@ export async function buildCurrentExportArtifact({
     contentDir,
     source,
     siteMetadataDatabase: target.database,
+    signal,
   })
 }
 
@@ -216,6 +223,7 @@ export async function runExportJob({
         target,
         workDir,
         source: { type: "current" },
+        signal: handle.signal,
       })
 
       await handle.setPhase("packaging")
@@ -232,6 +240,7 @@ export async function runExportJob({
       applicationUuid: target.applicationUuid,
       database: target.database,
       targetDir: restoreDir,
+      signal: handle.signal,
     })
 
     await handle.setPhase("packaging")
@@ -239,6 +248,7 @@ export async function runExportJob({
     await gunzipFile({
       sourcePath: dbDumpGzPath,
       destPath: path.join(workDir, "db.sql"),
+      signal: handle.signal,
     })
 
     const artifact = await writeArtifact({
@@ -251,6 +261,7 @@ export async function runExportJob({
         versionTime: source.versionTime,
       },
       siteMetadataDatabase: null,
+      signal: handle.signal,
     })
 
     await handle.setArtifact(artifact)

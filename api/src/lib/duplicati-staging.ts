@@ -169,12 +169,15 @@ export async function stageDuplicatiVersion({
   applicationUuid,
   database,
   targetDir,
+  signal,
 }: {
   backupId: string
   versionTime: string
   applicationUuid: string
   database: string
   targetDir: string
+  /** Aborts the Duplicati restore and the wait for it (a cancelled job). */
+  signal?: AbortSignal
 }): Promise<{ contentDir: string; dbDumpGzPath: string }> {
   const volumeBackupPath = ghostContentVolumeBackupPath(applicationUuid)
   const dumpBackupPath = dbDumpBackupPath(database)
@@ -212,6 +215,7 @@ export async function stageDuplicatiVersion({
     )
   }
 
+  signal?.throwIfAborted()
   await fs.mkdir(targetDir, { recursive: true })
   await assertStagingMountShared()
 
@@ -227,6 +231,7 @@ export async function stageDuplicatiVersion({
   await waitForDuplicatiTask({
     taskId,
     timeoutMs: config.duplicatiRestoreTimeoutMinutes * 60 * 1000,
+    signal,
   })
 
   // Duplicati strips the largest common prefix when restoring to a new

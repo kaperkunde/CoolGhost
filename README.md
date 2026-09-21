@@ -129,7 +129,11 @@ Endpoints (all require the bearer token): `GET /v1/data/backups` lists
 Duplicati jobs and their restorable versions (a job whose versions could not
 be listed carries `versionsError` instead of pretending to be empty); `POST /v1/data/spots/:spot/export`
 and `POST /v1/data/spots/:spot/restore` start async jobs polled via
-`GET /v1/data/jobs/:id`. Exports package `info.json` + `db.sql` + `content/`
+`GET /v1/data/jobs/:id` (one job per spot at a time; a second start answers
+409 with the running job as `activeJob`). `POST /v1/data/jobs/:id/cancel`
+stops a job — killing its dump, packaging or Duplicati restore — until a
+restore starts writing the site's data; from then on it answers 409 with
+`mutationStarted: true` and the restore runs to the end. Exports package `info.json` + `db.sql` + `content/`
 into one `.tar.gz` under `staging/artifacts/`, described by
 `GET /v1/data/spots/:spot/artifact` and streamed by
 `GET /v1/data/spots/:spot/artifact/download`. Restore archives arrive as a

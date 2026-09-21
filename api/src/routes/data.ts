@@ -5,8 +5,10 @@ import { Router } from "express"
 import { config } from "../config.js"
 import {
   activeJobForSpot,
+  cancelDataJob,
   getDataJob,
   JobConflictError,
+  JobNotCancellableError,
   startDataJob,
   type DataJob,
 } from "../lib/data-jobs.js"
@@ -51,6 +53,7 @@ function jobResponse(job: DataJob) {
     spotId: job.spotId,
     phase: job.phase,
     mutationStarted: job.mutationStarted,
+    cancelled: job.cancelled,
     warnings: job.warnings,
     error: job.error,
     artifact: job.artifact,
@@ -66,7 +69,14 @@ function handleError(res: import("express").Response, error: unknown): void {
   }
 
   if (error instanceof JobConflictError) {
-    res.status(409).json({ error: error.message })
+    res
+      .status(409)
+      .json({ error: error.message, activeJob: jobResponse(error.activeJob) })
+    return
+  }
+
+  if (error instanceof JobNotCancellableError) {
+    res.status(409).json({ error: error.message, mutationStarted: true })
     return
   }
 
@@ -423,6 +433,26 @@ dataRouter.get("/jobs/:jobId", (req, res) => {
   }
 
   res.json({ ok: true, job: jobResponse(job) })
+})
+
+/**
+ * Cancel a running job. Answers the job as it now stands: cancelled, or
+ * unchanged when it had already finished. 409 once a restore has started
+ * writing the site's data — it must run to the end.
+ */
+dataRouter.post("/jobs/:jobId/cancel", async (req, res) => {
+  try {
+    const job = await cancelDataJob(String(req.params["jobId"]))
+
+    if (!job) {
+      res.status(404).json({ error: "Job not found" })
+      return
+    }
+
+    res.json({ ok: true, job: jobResponse(job) })
+  } catch (error) {
+    handleError(res, error)
+  }
 })
 
 dataRouter.get("/spots/:spotId/active-job", (req, res) => {

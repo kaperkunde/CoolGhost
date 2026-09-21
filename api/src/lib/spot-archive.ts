@@ -38,10 +38,13 @@ export async function packageSpotArchive({
   workDir,
   contentDir,
   artifactPath,
+  signal,
 }: {
   workDir: string
   contentDir: string
   artifactPath: string
+  /** Kills tar when aborted. */
+  signal?: AbortSignal
 }): Promise<void> {
   const contentParent = path.dirname(contentDir)
   const contentBase = path.basename(contentDir)
@@ -70,7 +73,7 @@ export async function packageSpotArchive({
         contentParent,
         contentBase,
       ],
-      { maxBuffer: 10 * 1024 * 1024 },
+      { maxBuffer: 10 * 1024 * 1024, signal },
     )
   } catch (error) {
     // GNU tar exits 1 when a file changed while it was being read, which a
@@ -87,6 +90,9 @@ export async function packageSpotArchive({
       return
     }
 
+    // A killed or failed tar leaves a truncated archive that would still pass
+    // readArtifactSidecar's size check and be offered for download.
+    await fs.rm(artifactPath, { force: true })
     throw error
   }
 }
@@ -109,14 +115,17 @@ export async function extractSpotArchive({
 export async function gunzipFile({
   sourcePath,
   destPath,
+  signal,
 }: {
   sourcePath: string
   destPath: string
+  signal?: AbortSignal
 }): Promise<void> {
   await pipeline(
     createReadStream(sourcePath),
     createGunzip(),
     createWriteStream(destPath),
+    { signal },
   )
 }
 
@@ -151,11 +160,9 @@ export class RestoreValidationError extends Error {
 export async function validateStagedRestore({
   staged,
   expectedSpotId,
-  expectedDatabase,
 }: {
   staged: StagedRestore
   expectedSpotId: string
-  expectedDatabase: string
 }): Promise<string[]> {
   const warnings: string[] = []
 
@@ -197,12 +204,17 @@ export async function validateStagedRestore({
   }
 
   if (staged.info) {
+    // Shown to the site owner, so name the other site only when its id is
+    // an address they would recognise (older plekjes are keyed by domain);
+    // an opaque id or this site's database name means nothing to them.
     if (
       staged.info.spotId &&
       staged.info.spotId.toLowerCase() !== expectedSpotId.toLowerCase()
     ) {
       warnings.push(
-        `This archive was exported from ${staged.info.spotId}, not ${expectedSpotId}.`,
+        staged.info.spotId.includes(".")
+          ? `This archive came from a different site (${staged.info.spotId}).`
+          : "This archive came from a different site.",
       )
     }
 
@@ -212,12 +224,6 @@ export async function validateStagedRestore({
     ) {
       warnings.push(
         "This archive was created by a newer export format and may not restore cleanly.",
-      )
-    }
-
-    if (staged.info.database && staged.info.database !== expectedDatabase) {
-      warnings.push(
-        `The archive's database name (${staged.info.database}) differs from this plekje's (${expectedDatabase}).`,
       )
     }
   }

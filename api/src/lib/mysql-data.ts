@@ -28,9 +28,12 @@ function cliEnv(): NodeJS.ProcessEnv {
 export async function dumpDatabaseToFile({
   database,
   destPath,
+  signal,
 }: {
   database: string
   destPath: string
+  /** Kills mysqldump when aborted. */
+  signal?: AbortSignal
 }): Promise<void> {
   const db = assertSafeDatabaseName(database)
 
@@ -44,7 +47,7 @@ export async function dumpDatabaseToFile({
         "--lock-tables=false",
         db,
       ],
-      { env: cliEnv(), stdio: ["ignore", "pipe", "pipe"] },
+      { env: cliEnv(), stdio: ["ignore", "pipe", "pipe"], signal },
     )
 
     const out = createWriteStream(destPath)
@@ -78,7 +81,11 @@ export async function dumpDatabaseToFile({
   })
 }
 
-/** Drop, recreate and re-import a database from a plain SQL dump file. */
+/**
+ * Drop, recreate and re-import a database from a plain SQL dump file.
+ * Deliberately takes no abort signal: it overwrites live data, and killing it
+ * halfway would leave the site with a partial database.
+ */
 export async function importDatabaseFromFile({
   database,
   sqlPath,
