@@ -206,6 +206,7 @@ async function safeText(response: Response): Promise<string> {
 async function duplicatiFetch<T>(
   path: string,
   init?: RequestInit,
+  { body = "json" }: { body?: "json" | "none" } = {},
 ): Promise<T> {
   let token = await accessToken()
 
@@ -238,6 +239,11 @@ async function duplicatiFetch<T>(
     throw new DuplicatiError(
       `Duplicati request ${path} failed (${response.status}): ${await safeText(response)}`,
     )
+  }
+
+  if (body === "none") {
+    await response.body?.cancel()
+    return undefined as T
   }
 
   return readJson<T>(response, path)
@@ -527,7 +533,12 @@ export async function getDuplicatiTask(
  */
 export async function abortDuplicatiTask(taskId: number): Promise<void> {
   try {
-    await duplicatiFetch(`/api/v1/task/${taskId}/abort`, { method: "POST" })
+    // Answers 200 with an empty body (Duplicati 2.3.0.3).
+    await duplicatiFetch<void>(
+      `/api/v1/task/${taskId}/abort`,
+      { method: "POST" },
+      { body: "none" },
+    )
   } catch (error) {
     console.warn("Could not abort Duplicati task", { taskId, error })
   }
