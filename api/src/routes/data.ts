@@ -34,7 +34,9 @@ import {
   appendRestoreUploadChunk,
   completeRestoreUpload,
   EmptyUploadError,
+  InsufficientStorageError,
   startRestoreUpload,
+  UploadIncompleteError,
   UploadNotFoundError,
   UploadOffsetMismatchError,
   UploadTooLargeError,
@@ -97,6 +99,18 @@ function handleError(res: import("express").Response, error: unknown): void {
 
   if (error instanceof UploadOffsetMismatchError) {
     res.status(409).json({ error: error.message, sizeBytes: error.sizeBytes })
+    return
+  }
+
+  if (error instanceof UploadIncompleteError) {
+    res
+      .status(409)
+      .json({ error: error.message, missingBytes: error.missingBytes })
+    return
+  }
+
+  if (error instanceof InsufficientStorageError) {
+    res.status(507).json({ error: error.message })
     return
   }
 
@@ -358,22 +372,34 @@ dataRouter.post("/spots/:spotId/uploads", async (req, res) => {
  * app, app to this api — inside the proxies' request-read timeout (Traefik's
  * default is 60s for the whole request, body included, which a single-request
  * upload of a real archive over a home uplink cannot meet: it dies with a
- * 499). Start a session, PUT chunks at increasing offsets, then complete it;
- * the returned uploadRelPath is the `upload` restore source.
+ * 499). Start a session, PUT chunks, then complete it; the returned
+ * uploadRelPath is the `upload` restore source.
+ *
+ * Starting with `{ "sizeBytes" }` opens a ranged session (answered with
+ * `ranged: true`): chunks may then land at any offset, in any order and
+ * concurrently. Without it, chunks must arrive in order — see
+ * appendRestoreUploadChunk.
  */
 dataRouter.post("/spots/:spotId/uploads/sessions", async (req, res) => {
   try {
     const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
+    const body = (req.body ?? {}) as { sizeBytes?: unknown }
+    const sizeBytes =
+      body.sizeBytes === undefined ? undefined : Number(body.sizeBytes)
 
     res
       .status(201)
-      .json({ ok: true, ...(await startRestoreUpload({ spotId })) })
+      .json({ ok: true, ...(await startRestoreUpload({ spotId, sizeBytes })) })
   } catch (error) {
     handleError(res, error)
   }
 })
 
-/** Append the raw request body at `offset`; 409 (with sizeBytes) when the file is elsewhere. */
+/**
+ * Write the raw request body at `offset`. Ranged sessions need the
+ * Content-Length and answer receivedBytes; in-order sessions answer the new
+ * sizeBytes, or 409 (with sizeBytes) when the file ends elsewhere.
+ */
 dataRouter.put("/spots/:spotId/uploads/sessions/data", async (req, res) => {
   try {
     const spotId = assertSafeName(String(req.params["spotId"]), "spot id")
@@ -397,6 +423,7 @@ dataRouter.put("/spots/:spotId/uploads/sessions/data", async (req, res) => {
       spotId,
       uploadRelPath,
       offset,
+      lengthBytes: Number.isFinite(declaredLength) ? declaredLength : undefined,
       body: req,
     })
 

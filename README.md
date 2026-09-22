@@ -122,7 +122,7 @@ requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 | `DUPLICATI_URL` / `DUPLICATI_PASSWORD`    | Duplicati web service (e.g. `http://duplicati:8200`) + `SERVICE_PASSWORD_DUPLICATI`                         |
 | `DUPLICATI_STAGING_DIR`                   | Staging path as seen inside the duplicati container (defaults to `STAGING_DIR`)                             |
 | `ARTIFACT_TTL_HOURS`                      | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)                           |
-| `MAX_UPLOAD_BYTES`                        | Optional; largest restore archive accepted by the uploads route (default 4 GiB)                             |
+| `MAX_UPLOAD_BYTES`                        | Optional; largest restore archive accepted by the uploads route (default 16 GiB)                            |
 | `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                                              |
 | `CLICKHOUSE_URL` / `CLICKHOUSE_DATABASE`  | Optional; the analytics store exports read from and restores write back. Unset ⇒ exports and restores carry no analytics, with a warning on the job |
 
@@ -139,13 +139,18 @@ restore starts writing the site's data; from then on it answers 409 with
 into one `.tar.gz` under `staging/artifacts/`, described by
 `GET /v1/data/spots/:spot/artifact` and streamed by
 `GET /v1/data/spots/:spot/artifact/download`. Restore archives arrive as a
-chunked session: `POST /v1/data/spots/:spot/uploads/sessions` opens one,
+chunked session: `POST /v1/data/spots/:spot/uploads/sessions` with
+`{ "sizeBytes" }` opens a ranged one (answered with `ranged: true`; 413 over
+`MAX_UPLOAD_BYTES`, 507 when the staging disk lacks room for the archive and
+its unpacked copy),
 `PUT /v1/data/spots/:spot/uploads/sessions/data?upload=<uploadRelPath>&offset=<n>`
-appends the raw request body (409 with the real `sizeBytes` when the offset
-is not where the file ends), and
+writes the raw request body at that offset — in any order, several at once,
+with a Content-Length — and
 `POST /v1/data/spots/:spot/uploads/sessions/complete` (`{ "uploadRelPath" }`)
-finalizes it, returning the `uploadRelPath` to pass as the `upload` restore
-source. Each chunk is its own short request, so no hop has to hold a
+checks every byte arrived (409 with `missingBytes` if not) and finalizes it,
+returning the `uploadRelPath` to pass as the `upload` restore source. A
+session opened without `sizeBytes` takes its chunks strictly in order instead
+(409 with the real `sizeBytes` when the offset is not where the file ends). Each chunk is its own short request, so no hop has to hold a
 multi-minute upload open — Traefik's default request-read timeout is 60s
 for the whole request, body included, and a large archive sent in one
 `POST /v1/data/spots/:spot/uploads` (still supported) dies there with a
