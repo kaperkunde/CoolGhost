@@ -163,6 +163,8 @@ export async function getMysqlServerVersion(): Promise<string | null> {
 export async function getGhostSiteMetadata(database: string): Promise<{
   siteTitle: string | null
   ghostMigrationVersion: string | null
+  /** Keys this site's rows in the analytics store; null before Ghost sets it. */
+  siteUuid: string | null
 }> {
   const db = assertSafeDatabaseName(database)
   const connection = await mysql.createConnection(mysqlConnectionOptions())
@@ -170,6 +172,7 @@ export async function getGhostSiteMetadata(database: string): Promise<{
   try {
     let siteTitle: string | null = null
     let ghostMigrationVersion: string | null = null
+    let siteUuid: string | null = null
 
     try {
       const [rows] = await connection.query<mysql.RowDataPacket[]>(
@@ -189,7 +192,17 @@ export async function getGhostSiteMetadata(database: string): Promise<{
       // Same — informational only.
     }
 
-    return { siteTitle, ghostMigrationVersion }
+    try {
+      const [rows] = await connection.query<mysql.RowDataPacket[]>(
+        `SELECT value FROM \`${db}\`.settings WHERE \`key\` = 'site_uuid' LIMIT 1`,
+      )
+      const value = rows[0]?.value as string | undefined
+      siteUuid = value?.trim() ? value.trim() : null
+    } catch {
+      // Same — the site simply has no analytics to carry.
+    }
+
+    return { siteTitle, ghostMigrationVersion, siteUuid }
   } finally {
     await connection.end()
   }

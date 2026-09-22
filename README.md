@@ -124,6 +124,7 @@ requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 | `ARTIFACT_TTL_HOURS`                      | Optional; export artifacts/uploads/job dirs are swept after this TTL (default 24)                           |
 | `MAX_UPLOAD_BYTES`                        | Optional; largest restore archive accepted by the uploads route (default 4 GiB)                             |
 | `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                                              |
+| `CLICKHOUSE_URL` / `CLICKHOUSE_DATABASE`  | Optional; the analytics store exports read from and restores write back. Unset ⇒ exports and restores carry no analytics, with a warning on the job |
 
 Endpoints (all require the bearer token): `GET /v1/data/backups` lists
 Duplicati jobs and their restorable versions (a job whose versions could not
@@ -133,7 +134,8 @@ and `POST /v1/data/spots/:spot/restore` start async jobs polled via
 409 with the running job as `activeJob`). `POST /v1/data/jobs/:id/cancel`
 stops a job — killing its dump, packaging or Duplicati restore — until a
 restore starts writing the site's data; from then on it answers 409 with
-`mutationStarted: true` and the restore runs to the end. Exports package `info.json` + `db.sql` + `content/`
+`mutationStarted: true` and the restore runs to the end. Exports package `info.json` + `db.sql` +
+`analytics.jsonl` + `content/`
 into one `.tar.gz` under `staging/artifacts/`, described by
 `GET /v1/data/spots/:spot/artifact` and streamed by
 `GET /v1/data/spots/:spot/artifact/download`. Restore archives arrive as a
@@ -150,6 +152,22 @@ for the whole request, body included, and a large archive sent in one
 499 on any ordinary uplink. Restores expect
 the caller to stop the Ghost container first, snapshot current data as an
 undo artifact, then replace the content volume and re-import the database.
+
+`analytics.jsonl` is the site's ClickHouse events (`analytics_events` as
+JSONEachRow), and makes an archive a complete copy of a site rather than its
+database and files alone. A current-data export reads them live; a
+backup-sourced one takes the copy `pre-backup.sh` wrote into that restore
+point, so all three parts of the archive are the same moment. On restore the
+rows are loaded last, after the database, and every row is written under the
+*restored* site's `site_uuid` rather than the one in the file — an archive is
+something a site owner can upload, so it must not be able to write into
+another site's analytics. The site's existing rows are cleared first
+(`analytics_events` and `mv_hits`, which its materialized view repopulates on
+insert). Analytics never fail a job: a missing `CLICKHOUSE_URL`, an archive
+without the member, or a load that errors leaves the site's current analytics
+untouched and adds a warning to the finished job. `info.json` records
+`analytics: { siteUuid, rows }` (or `null`) and the format version is now `2`;
+a version-1 archive still restores, simply without touching analytics.
 When `STAGING_DIR` or the Duplicati env is missing the routes degrade
 gracefully (503 / empty list) instead of failing at boot — with `DUPLICATI_URL`
 unset, `GET /v1/data/backups` answers `{"configured": false, "backups": []}`
@@ -262,7 +280,7 @@ cannot be exact). Site uuids that no database claims are the orphans. Wiring:
 
 | Variable                                  | Notes                                                                          |
 | ----------------------------------------- | ------------------------------------------------------------------------------ |
-| `CLICKHOUSE_URL`                          | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 |
+| `CLICKHOUSE_URL`                          | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 (and exports carry no analytics) |
 | `CLICKHOUSE_DATABASE`                     | Defaults to `ghost_analytics`                                                  |
 | `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | Optional; the stock stack uses the passwordless default user                   |
 
@@ -304,12 +322,33 @@ API's backup, export and restore flows with nothing to click:
 | `CoolGhost Daily`  | daily at 03:30 | 15 days   | `file:///backups/daily`  | the above plus `/data/coolify/`      |
 
 Both run `--run-script-before=/usr/local/bin/pre-backup.sh`, so every snapshot
-contains a fresh `gzip`ped `mysqldump` of each site database taken alongside the
-content volumes — which is exactly the pair (`/local/volumes/<uuid>_ghost-content-data/_data/`
-and `/data/db_dumps/<database>.sql.gz`) that `GET /v1/data/backups` indexes and
-that the restore flow pulls back out of a chosen version. Live MySQL and
-ClickHouse data directories are excluded: a file-level copy of a running
-database is not restorable, and the dumps carry that content properly.
+contains a fresh `mysqldump` of each site database, and a dump of that site's
+analytics events, taken alongside the content volumes — the three parts
+(`/local/volumes/<uuid>_ghost-content-data/_data/`,
+`/data/db_dumps/<database>.sql` and `/data/db_dumps/<database>.analytics.jsonl`)
+that `GET /v1/data/backups` indexes and that the export and restore flows pull
+back out of a chosen version. Live MySQL and ClickHouse data directories are
+excluded: a file-level copy of a running database is not restorable, and the
+dumps carry that content properly.
+
+The analytics dump needs `CLICKHOUSE_URL` on the **duplicati** resource (see
+the compose files). Without it, or for a database that is not a Ghost site,
+the backup simply holds no analytics for it — the SQL dump is unaffected and
+the backup still succeeds.
+
+**Neither dump is compressed**, and that is deliberate. Duplicati
+deduplicates on fixed-size blocks of each source file, so a plain dump costs
+only the blocks that changed since the previous run — nothing at all for an
+untouched database, and just the new tail for the analytics, which are
+written in insertion order for exactly that reason. A `gzip`ped dump differs
+from end to end after any change and is therefore stored again in full by
+every hourly run, retained 24 times over; the destination is compressed
+either way, so the uncompressed source costs nothing at rest. Only the
+scratch copy in `/data/db_dumps` is larger.
+
+> Dumps were `<database>.sql.gz` until this change. The API reads either
+> spelling, so restore points taken by an older stack keep working; new ones
+> use the plain files.
 
 The hourly job is also kicked off once at the end of provisioning, so there is a
 restorable version immediately instead of an empty picker for the first hour.

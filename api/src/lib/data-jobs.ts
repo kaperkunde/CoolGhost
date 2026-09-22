@@ -29,6 +29,7 @@ export type RestoreJobPhase =
   | "validating"
   | "applying_files"
   | "applying_db"
+  | "applying_analytics"
   | "done"
   | "failed"
 

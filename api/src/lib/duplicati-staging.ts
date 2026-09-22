@@ -10,8 +10,10 @@ import {
 } from "./duplicati.js"
 import { UserFacingError } from "./errors.js"
 import {
+  analyticsDumpBackupPath,
   dbDumpBackupPath,
   ghostContentVolumeBackupPath,
+  legacyDbDumpBackupPath,
   stagingRoot,
   toStagingRelativePath,
 } from "./staging.js"
@@ -163,6 +165,15 @@ async function findFirst({
   return null
 }
 
+export type StagedDuplicatiVersion = {
+  contentDir: string
+  /** The site's database dump; gunzip it first when `dbDumpCompressed`. */
+  dbDumpPath: string
+  dbDumpCompressed: boolean
+  /** The site's analytics events (JSONEachRow), when the version carries them. */
+  analyticsDumpPath: string | null
+}
+
 export async function stageDuplicatiVersion({
   backupId,
   versionTime,
@@ -178,9 +189,9 @@ export async function stageDuplicatiVersion({
   targetDir: string
   /** Aborts the Duplicati restore and the wait for it (a cancelled job). */
   signal?: AbortSignal
-}): Promise<{ contentDir: string; dbDumpGzPath: string }> {
+}): Promise<StagedDuplicatiVersion> {
   const volumeBackupPath = ghostContentVolumeBackupPath(applicationUuid)
-  const dumpBackupPath = dbDumpBackupPath(database)
+  const analyticsBackupPath = analyticsDumpBackupPath(database)
 
   // Both pieces must exist in the version before restoring anything. Checking
   // up front gives each miss an accurate error, and guarantees the restore
@@ -203,17 +214,40 @@ export async function stageDuplicatiVersion({
     )
   }
 
-  const hasDump = await duplicatiVersionContainsPath({
+  // Dumps are plain SQL since analytics joined the backups; versions taken
+  // before that carry a gzipped one. Whichever this version has is the one
+  // restored and unpacked below.
+  const plainDumpPath = dbDumpBackupPath(database)
+  const legacyDumpPath = legacyDbDumpBackupPath(database)
+
+  const dumpBackupPath = (await duplicatiVersionContainsPath({
     backupId,
     time: versionTime,
-    pathPrefix: dumpBackupPath,
-  })
+    pathPrefix: plainDumpPath,
+  }))
+    ? plainDumpPath
+    : (await duplicatiVersionContainsPath({
+          backupId,
+          time: versionTime,
+          pathPrefix: legacyDumpPath,
+        }))
+      ? legacyDumpPath
+      : null
 
-  if (!hasDump) {
+  if (!dumpBackupPath) {
     throw new UserFacingError(
       "This backup version has the site's files but no database dump. It was likely taken before automatic database dumps covered this site — pick a newer version.",
     )
   }
+
+  // Analytics are a bonus, not a requirement: versions taken before they were
+  // dumped, and servers with no analytics stack, simply have none. The export
+  // and restore jobs warn in that case rather than failing.
+  const hasAnalytics = await duplicatiVersionContainsPath({
+    backupId,
+    time: versionTime,
+    pathPrefix: analyticsBackupPath,
+  })
 
   signal?.throwIfAborted()
   await fs.mkdir(targetDir, { recursive: true })
@@ -224,7 +258,11 @@ export async function stageDuplicatiVersion({
   const taskId = await startDuplicatiRestore({
     backupId,
     time: versionTime,
-    paths: [volumeBackupPath, dumpBackupPath],
+    paths: [
+      volumeBackupPath,
+      dumpBackupPath,
+      ...(hasAnalytics ? [analyticsBackupPath] : []),
+    ],
     targetPath: restorePath,
   })
 
@@ -238,7 +276,8 @@ export async function stageDuplicatiVersion({
   // location, so the exact layout under targetDir varies — locate the
   // restored pieces instead of assuming paths.
   const volumeDirName = `${applicationUuid}_ghost-content-data`
-  const dumpFileName = `${database}.sql.gz`
+  const dumpFileName = path.posix.basename(dumpBackupPath)
+  const dumpCompressed = dumpFileName.endsWith(".gz")
 
   const contentDir =
     (await findFirst({
@@ -274,14 +313,14 @@ export async function stageDuplicatiVersion({
     )
   }
 
-  const dbDumpGzPath = await findFirst({
+  const dbDumpPath = await findFirst({
     rootDir: targetDir,
     maxDepth: 8,
     matches: (entryPath, isDirectory) =>
       !isDirectory && path.basename(entryPath) === dumpFileName,
   })
 
-  if (!dbDumpGzPath) {
+  if (!dbDumpPath) {
     const restored = await describeRestoreOutput(targetDir)
 
     throw new Error(
@@ -289,14 +328,31 @@ export async function stageDuplicatiVersion({
     )
   }
 
+  const analyticsDumpPath = hasAnalytics
+    ? await findFirst({
+        rootDir: targetDir,
+        maxDepth: 8,
+        matches: (entryPath, isDirectory) =>
+          !isDirectory &&
+          path.basename(entryPath) === path.posix.basename(analyticsBackupPath),
+      })
+    : null
+
   console.info("Staged Duplicati version", {
     backupId,
     versionTime,
     restorePath,
     targetDir,
     contentDir,
-    dbDumpGzPath,
+    dbDumpPath,
+    dumpCompressed,
+    analyticsDumpPath,
   })
 
-  return { contentDir, dbDumpGzPath }
+  return {
+    contentDir,
+    dbDumpPath,
+    dbDumpCompressed: dumpCompressed,
+    analyticsDumpPath,
+  }
 }

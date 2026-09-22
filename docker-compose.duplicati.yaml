@@ -30,6 +30,12 @@ services:
       - "MYSQL_HOST=${MYSQL_HOST:?Set MYSQL_HOST to the shared MySQL hostname, e.g. mysql-ghost-}"
       - "MYSQL_PORT=${MYSQL_PORT:-3306}"
       - "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-${SERVICE_PASSWORD_MYSQLROOT}}"
+      # pre-backup.sh snapshots each site's analytics events alongside its SQL
+      # dump, so a restore point carries all three parts of a site. Point this
+      # at the shared analytics stack's ClickHouse (Coolify custom name +
+      # trailing dash); without it the backups simply hold no analytics.
+      - "CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://clickhouse-ghost-analytics-:8123}"
+      - "CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-ghost_analytics}"
       # First-run provisioning of the stock hourly/daily backup jobs. Runs once
       # per volume (marker: /config/coolghost-bootstrap.json); existing jobs are
       # never touched. Set DUPLICATI_BOOTSTRAP_ENABLED=false to configure by hand.

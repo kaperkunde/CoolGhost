@@ -111,8 +111,25 @@ export function ghostContentVolumeBackupPath(applicationUuid: string): string {
   return `/local/volumes/${uuid}_ghost-content-data/_data/`
 }
 
+/**
+ * The hourly/daily backup's dump of one site database, as duplicati recorded
+ * its path. Plain SQL rather than gzip on purpose: duplicati dedupes on
+ * fixed-size blocks of the source file, so an uncompressed dump stores only
+ * what changed since the last run, while a gzipped one differs everywhere
+ * and is stored again in full every hour (see duplicati/pre-backup.sh).
+ */
 export function dbDumpBackupPath(database: string): string {
-  return `/data/db_dumps/${assertSafeDatabaseName(database)}.sql.gz`
+  return `/data/db_dumps/${assertSafeDatabaseName(database)}.sql`
+}
+
+/** Backup versions taken before the dumps stopped being gzipped. */
+export function legacyDbDumpBackupPath(database: string): string {
+  return `${dbDumpBackupPath(database)}.gz`
+}
+
+/** The same backup's dump of the site's analytics events (JSONEachRow). */
+export function analyticsDumpBackupPath(database: string): string {
+  return `/data/db_dumps/${assertSafeDatabaseName(database)}.analytics.jsonl`
 }
 
 async function removeIfOlderThan(
