@@ -51,6 +51,7 @@ services:
       # Analytics storage reporting (/v1/storage/analytics).
       - CLICKHOUSE_URL=http://clickhouse:8123
       - CLICKHOUSE_DATABASE=ghost_analytics
+      - CLICKHOUSE_PASSWORD=${SERVICE_PASSWORD_CLICKHOUSE}
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
       # Export artifacts, restore uploads and job state. Shared only with the
@@ -79,6 +80,11 @@ services:
     environment:
       CLICKHOUSE_DB: ghost_analytics
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # The image rewrites the `default` user from this on every start, so
+      # existing volumes pick it up too. Coolify generates and keeps it; every
+      # consumer below reads the same magic var. /ping needs no password, so
+      # the healthchecks are unaffected.
+      CLICKHOUSE_PASSWORD: ${SERVICE_PASSWORD_CLICKHOUSE}
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     ulimits:
@@ -99,6 +105,7 @@ services:
       PORT: 3000
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ghost_analytics
+      CLICKHOUSE_PASSWORD: ${SERVICE_PASSWORD_CLICKHOUSE}
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -150,6 +157,7 @@ services:
       # Without these the backups simply hold no analytics.
       - "CLICKHOUSE_URL=http://clickhouse:8123"
       - "CLICKHOUSE_DATABASE=ghost_analytics"
+      - "CLICKHOUSE_PASSWORD=${SERVICE_PASSWORD_CLICKHOUSE}"
       # First-run provisioning of the stock hourly/daily backup jobs. Runs once
       # per volume (marker: /config/coolghost-bootstrap.json); existing jobs are
       # never touched. Set DUPLICATI_BOOTSTRAP_ENABLED=false to configure by hand.

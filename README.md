@@ -42,6 +42,8 @@ Set `SERVICE_USER_MYSQL`, `SERVICE_PASSWORD_MYSQL`, `SERVICE_PASSWORD_MYSQLROOT`
 
 Deploy once with custom name **`ghost-analytics`**. No extra configuration beyond the shared env vars Coolify provides.
 
+ClickHouse's `default` user is protected by Coolify's generated `SERVICE_PASSWORD_CLICKHOUSE`, which the stack's own traffic-stats reads directly. Anything outside this resource — the API and Duplicati resources, and the GhostHost app — cannot read another resource's magic variables: copy the value into their `CLICKHOUSE_PASSWORD` once.
+
 ### 3. Traefik routes (once per server)
 
 Coolify already runs Traefik (`coolify-proxy`) on port 443. Each Ghost blog needs `/.ghost/stats` and `/.ghost/analytics` routed to the **shared** analytics stack on whatever domain Coolify assigns.
@@ -125,6 +127,7 @@ requires extra mounts and env (already wired in `docker-compose.shared.yaml`;
 | `MAX_UPLOAD_BYTES`                        | Optional; largest restore archive accepted by the uploads route (default 16 GiB)                            |
 | `GHOST_CONTENT_UID` / `GHOST_CONTENT_GID` | Optional; ownership applied to restored content (default 1000)                                              |
 | `CLICKHOUSE_URL` / `CLICKHOUSE_DATABASE`  | Optional; the analytics store exports read from and restores write back. Unset ⇒ exports and restores carry no analytics, with a warning on the job |
+| `CLICKHOUSE_PASSWORD`                     | The analytics stack's `SERVICE_PASSWORD_CLICKHOUSE` (see below)                                              |
 
 Endpoints (all require the bearer token): `GET /v1/data/backups` lists
 Duplicati jobs and their restorable versions (a job whose versions could not
@@ -290,7 +293,7 @@ cannot be exact). Site uuids that no database claims are the orphans. Wiring:
 | ----------------------------------------- | ------------------------------------------------------------------------------ |
 | `CLICKHOUSE_URL`                          | HTTP interface of the analytics stack's ClickHouse; unset ⇒ route responds 503 (and exports carry no analytics) |
 | `CLICKHOUSE_DATABASE`                     | Defaults to `ghost_analytics`                                                  |
-| `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | Optional; the stock stack uses the passwordless default user                   |
+| `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | The `default` user's password is Coolify's generated `SERVICE_PASSWORD_CLICKHOUSE`; `docker-compose.shared.yaml` hands it to every consumer. A separate resource (split `docker-compose.api.yaml`/`docker-compose.duplicati.yaml`, the GhostHost app) needs it copied into its own `CLICKHOUSE_PASSWORD` |
 
 ```json
 {

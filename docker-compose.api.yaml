@@ -25,6 +25,9 @@ services:
       # (Coolify custom name `ghost-analytics` + trailing dash).
       CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse-ghost-analytics-:8123}
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-ghost_analytics}
+      # A separate resource cannot read the analytics stack's magic vars:
+      # copy its SERVICE_PASSWORD_CLICKHOUSE here.
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
     volumes:
       - "/var/lib/docker/volumes:/local/volumes"
       # Export artifacts, restore uploads and job state; served to the GhostHost
