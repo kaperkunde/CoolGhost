@@ -5,6 +5,10 @@ services:
     environment:
       CLICKHOUSE_DB: ghost_analytics
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # The image rewrites the `default` user from this on every start, so
+      # existing volumes pick it up too. Coolify generates and keeps it; the
+      # api and duplicati resources need a copy as their CLICKHOUSE_PASSWORD.
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-${SERVICE_PASSWORD_CLICKHOUSE}}
     volumes:
       - ghost-clickhouse-data:/var/lib/clickhouse
     ulimits:
@@ -24,6 +28,7 @@ services:
       PORT: 3000
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ghost_analytics
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-${SERVICE_PASSWORD_CLICKHOUSE}}
     depends_on:
       clickhouse:
         condition: service_healthy

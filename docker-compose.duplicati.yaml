@@ -36,6 +36,9 @@ services:
       # trailing dash); without it the backups simply hold no analytics.
       - "CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://clickhouse-ghost-analytics-:8123}"
       - "CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-ghost_analytics}"
+      # Copied from the analytics resource's SERVICE_PASSWORD_CLICKHOUSE — a
+      # separate resource cannot read its magic vars.
+      - "CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}"
       # First-run provisioning of the stock hourly/daily backup jobs. Runs once
       # per volume (marker: /config/coolghost-bootstrap.json); existing jobs are
       # never touched. Set DUPLICATI_BOOTSTRAP_ENABLED=false to configure by hand.
