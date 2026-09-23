@@ -6,6 +6,7 @@ import { checkMysqlConnectivity, formatMysqlError } from "./lib/mysql-connectivi
 import { ensureStagingLayout, startStagingSweeper } from "./lib/staging.js"
 import { dataRouter } from "./routes/data.js"
 import { databasesRouter } from "./routes/databases.js"
+import { ghostRouter } from "./routes/ghost.js"
 import { provisionRouter } from "./routes/provision.js"
 import { proxyRouter } from "./routes/proxy.js"
 import { storageRouter } from "./routes/storage.js"
@@ -22,6 +23,7 @@ app.get("/", (_req, res) => {
     health: "GET /health",
     provision: "POST /v1/provision/mysql-user",
     storage: "GET /v1/storage/content",
+    ghost: "POST /v1/ghost/:database/assistant-access",
   })
 })
 
@@ -49,6 +51,7 @@ app.use("/v1/databases", databasesRouter)
 app.use("/v1/data", dataRouter)
 app.use("/v1/proxy", proxyRouter)
 app.use("/v1/storage", storageRouter)
+app.use("/v1/ghost", ghostRouter)
 
 if (!config.proxyDynamicDir) {
   console.info(
