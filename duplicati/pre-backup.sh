@@ -39,8 +39,10 @@ dump_analytics() {
   local query="SELECT * FROM analytics_events WHERE site_uuid = {site_uuid:String} ORDER BY inserted_at, timestamp, session_id FORMAT JSONEachRow"
   local -a auth=()
 
-  if [[ -n "${CLICKHOUSE_USER:-}" ]]; then
-    auth+=(-H "X-ClickHouse-User: ${CLICKHOUSE_USER}")
+  # ClickHouse rejects a key without a user, so a password alone means the
+  # default user.
+  if [[ -n "${CLICKHOUSE_USER:-}" || -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
+    auth+=(-H "X-ClickHouse-User: ${CLICKHOUSE_USER:-default}")
   fi
 
   if [[ -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
