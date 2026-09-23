@@ -145,6 +145,11 @@ services:
       - "MYSQL_HOST=mysql"
       - "MYSQL_PORT=3306"
       - "MYSQL_ROOT_PASSWORD=${SERVICE_PASSWORD_MYSQLROOT}"
+      # pre-backup.sh snapshots each site's analytics events alongside its
+      # SQL dump, so a restore point carries all three parts of a site.
+      # Without these the backups simply hold no analytics.
+      - "CLICKHOUSE_URL=http://clickhouse:8123"
+      - "CLICKHOUSE_DATABASE=ghost_analytics"
       # First-run provisioning of the stock hourly/daily backup jobs. Runs once
       # per volume (marker: /config/coolghost-bootstrap.json); existing jobs are
       # never touched. Set DUPLICATI_BOOTSTRAP_ENABLED=false to configure by hand.

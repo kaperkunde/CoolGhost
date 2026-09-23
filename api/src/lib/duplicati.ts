@@ -322,46 +322,77 @@ export async function listDuplicatiFilesets(
     .sort((a, b) => (a.time < b.time ? 1 : -1))
 }
 
+export type DuplicatiSearchHit = {
+  /** Index into the job's versions, 0 = newest — as numbered when searched. */
+  version: number
+  path: string
+}
+
+const SEARCH_PAGE_SIZE = 1000
+
 /**
- * Check whether a fileset version contains the given path — a directory
- * (trailing "/") or an exact file, as recorded at backup time (e.g.
- * /local/volumes/<vol>/_data/ or /data/db_dumps/<db>.sql.gz).
+ * Every entry directly inside `folder` whose name contains `nameFilter`, once
+ * per version that holds it. One call covers all of a job's versions, which
+ * is what makes checking a site's restore points cheap.
  *
- * The path goes in the "filter" query parameter: Duplicati's REST API
- * exposes a single "/backup/{id}/files" endpoint and matches the filter
- * server-side (a URL path segment 404s). Both "prefix-only" and
- * "folder-contents" must be false — the response then contains exactly the
- * matching entry when the path exists in the version and nothing otherwise.
- * ("prefix-only=true" returns a placeholder entry with an empty Path even
- * for paths the version does not contain, and "folder-contents=true"
- * returns [] for file paths, so neither works as an existence check.)
+ * The v1 "/backup/{id}/files" endpoint cannot answer this per version: given
+ * a time and an exact path it looks at every version up to that time, so a
+ * path deleted since still reads as present.
+ *
+ * The hits carry version indexes but no usable time (Duplicati 2.3 sends a
+ * placeholder), so the caller maps them onto a fileset listing — see
+ * findSiteDataVersions for why that listing is taken on both sides of this.
  */
-export async function duplicatiVersionContainsPath({
+export async function searchDuplicatiVersions({
   backupId,
-  time,
-  pathPrefix,
+  folder,
+  nameFilter,
 }: {
   backupId: string
-  time: string
-  pathPrefix: string
-}): Promise<boolean> {
-  const query = new URLSearchParams({
-    filter: pathPrefix,
-    time,
-    "prefix-only": "false",
-    "folder-contents": "false",
-  })
+  folder: string
+  nameFilter: string
+}): Promise<DuplicatiSearchHit[]> {
+  const hits: DuplicatiSearchHit[] = []
 
-  const payload = await duplicatiFetch<{ Files?: Array<{ Path?: unknown }> }>(
-    `/api/v1/backup/${encodeURIComponent(backupId)}/files?${query.toString()}`,
-  )
+  for (let page = 0; ; page++) {
+    const payload = await duplicatiFetch<unknown>("/api/v2/backup/search", {
+      method: "POST",
+      body: JSON.stringify({
+        BackupId: backupId,
+        Paths: [folder],
+        Filters: [nameFilter],
+        PageSize: SEARCH_PAGE_SIZE,
+        Page: page,
+      }),
+    })
 
-  return (
-    Array.isArray(payload.Files) &&
-    payload.Files.some(
-      (file) => typeof file?.Path === "string" && file.Path.length > 0,
-    )
-  )
+    const data = fieldOf(payload, "Data")
+
+    if (fieldOf(payload, "Success") === false || !Array.isArray(data)) {
+      throw new DuplicatiError(
+        `Duplicati search in ${folder} failed: ${String(fieldOf(payload, "Error") ?? "unexpected response shape")}`,
+      )
+    }
+
+    for (const item of data) {
+      const version = fieldOf(item, "Version")
+      const path = fieldOf(item, "Path")
+
+      if (typeof version === "number" && typeof path === "string") {
+        hits.push({ version, path })
+      }
+    }
+
+    const total = Number(fieldOf(fieldOf(payload, "PageInfo"), "Total"))
+
+    if (
+      data.length < SEARCH_PAGE_SIZE ||
+      !Number.isFinite(total) ||
+      (page + 1) * SEARCH_PAGE_SIZE >= total
+    ) {
+      return hits
+    }
+  }
 }
 
 /**

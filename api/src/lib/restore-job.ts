@@ -1,6 +1,10 @@
 import { promises as fs } from "fs"
 import path from "path"
 
+import {
+  clickhouseConfigured,
+  replaceSiteAnalytics,
+} from "./clickhouse.js"
 import type { JobHandle } from "./data-jobs.js"
 import { stageDuplicatiVersion } from "./duplicati-staging.js"
 import { UserFacingError } from "./errors.js"
@@ -9,8 +13,9 @@ import {
   buildCurrentExportArtifact,
   type SpotDataTarget,
 } from "./export-job.js"
-import { importDatabaseFromFile } from "./mysql-data.js"
+import { getGhostSiteMetadata, importDatabaseFromFile } from "./mysql-data.js"
 import {
+  ANALYTICS_MEMBER,
   extractSpotArchive,
   gunzipFile,
   readArchiveInfo,
@@ -47,9 +52,16 @@ async function stageFromArchive({
 
   await extractSpotArchive({ archivePath, destDir: extractDir })
 
+  const analyticsJsonlPath = path.join(extractDir, ANALYTICS_MEMBER)
+  const hasAnalytics = await fs
+    .stat(analyticsJsonlPath)
+    .then((entry) => entry.isFile())
+    .catch(() => false)
+
   return {
     contentDir: path.join(extractDir, "content"),
     dbSqlPath: path.join(extractDir, "db.sql"),
+    analyticsJsonlPath: hasAnalytics ? analyticsJsonlPath : null,
     info: await readArchiveInfo(extractDir),
   }
 }
@@ -62,6 +74,71 @@ function resolveUploadPath(uploadRelPath: string): string {
   }
 
   return resolved
+}
+
+/**
+ * Load the staged analytics over the site's current ones.
+ *
+ * Runs after the database, so the site_uuid it keys on is the *restored*
+ * one — a site restored from another site's archive gets that archive's
+ * events under its own new uuid, and nothing is written outside it.
+ *
+ * Never throws: by this point the volume and the database are already
+ * replaced, and failing the job here would flag it as needing attention
+ * (offering the undo snapshot) over analytics alone. Problems become
+ * warnings on an otherwise successful restore.
+ */
+async function applyStagedAnalytics({
+  handle,
+  target,
+  staged,
+}: {
+  handle: JobHandle
+  target: SpotDataTarget
+  staged: StagedRestore
+}): Promise<void> {
+  if (!staged.analyticsJsonlPath) {
+    // validateStagedRestore already warned that there were none to apply.
+    return
+  }
+
+  if (!clickhouseConfigured()) {
+    await handle.addWarning(
+      "This server has no analytics store, so the backup's visitor analytics were not restored.",
+    )
+    return
+  }
+
+  try {
+    const { siteUuid } = await getGhostSiteMetadata(target.database)
+
+    if (!siteUuid) {
+      await handle.addWarning(
+        "The restored site has no analytics id yet, so its visitor analytics were not restored.",
+      )
+      return
+    }
+
+    const { rows } = await replaceSiteAnalytics({
+      siteUuid,
+      sourcePath: staged.analyticsJsonlPath,
+    })
+
+    console.info("Restored site analytics", {
+      spotId: target.spotId,
+      siteUuid,
+      rows,
+    })
+  } catch (error) {
+    console.error("Failed to restore site analytics", {
+      spotId: target.spotId,
+      error,
+    })
+
+    await handle.addWarning(
+      "The site's files and database were restored, but its visitor analytics could not be. The analytics that were there before are unchanged.",
+    )
+  }
 }
 
 /**
@@ -116,13 +193,23 @@ export async function runRestoreJob({
       })
 
       const dbSqlPath = path.join(handle.workDir, "db.sql")
-      await gunzipFile({
-        sourcePath: restored.dbDumpGzPath,
-        destPath: dbSqlPath,
-        signal: handle.signal,
-      })
 
-      staged = { contentDir: restored.contentDir, dbSqlPath, info: null }
+      if (restored.dbDumpCompressed) {
+        await gunzipFile({
+          sourcePath: restored.dbDumpPath,
+          destPath: dbSqlPath,
+          signal: handle.signal,
+        })
+      } else {
+        await fs.copyFile(restored.dbDumpPath, dbSqlPath)
+      }
+
+      staged = {
+        contentDir: restored.contentDir,
+        dbSqlPath,
+        analyticsJsonlPath: restored.analyticsDumpPath,
+        info: null,
+      }
     }
 
     await handle.setPhase("snapshotting")
@@ -157,6 +244,9 @@ export async function runRestoreJob({
       database: target.database,
       sqlPath: staged.dbSqlPath,
     })
+
+    await handle.setPhase("applying_analytics")
+    await applyStagedAnalytics({ handle, target, staged })
   } finally {
     for (const dir of [extractDir, restoreDir, snapshotWorkDir]) {
       await fs.rm(dir, { recursive: true, force: true })

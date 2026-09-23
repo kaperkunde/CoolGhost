@@ -37,7 +37,9 @@ export const config = {
   /** How long export artifacts, uploads and finished job dirs are kept. */
   artifactTtlHours: Number(process.env.ARTIFACT_TTL_HOURS ?? 24),
   /** Largest restore archive accepted by POST /v1/data/spots/:spot/uploads. */
-  maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES ?? 4 * 1024 * 1024 * 1024),
+  maxUploadBytes: Number(
+    process.env.MAX_UPLOAD_BYTES ?? 16 * 1024 * 1024 * 1024,
+  ),
   /** uid/gid the Ghost container runs as — restored content is chowned to this. */
   ghostContentUid: Number(process.env.GHOST_CONTENT_UID ?? 1000),
   ghostContentGid: Number(process.env.GHOST_CONTENT_GID ?? 1000),

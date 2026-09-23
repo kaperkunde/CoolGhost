@@ -12,7 +12,11 @@ import { config } from "../config.js"
 
 const execFileAsync = promisify(execFile)
 
-export const SPOT_ARCHIVE_FORMAT_VERSION = 1
+/**
+ * 2 added analytics.jsonl (the site's ClickHouse events) beside db.sql.
+ * A version-1 archive still restores; its analytics are simply left alone.
+ */
+export const SPOT_ARCHIVE_FORMAT_VERSION = 2
 
 /** Contents of info.json inside an export archive. */
 export type SpotArchiveInfo = {
@@ -27,11 +31,20 @@ export type SpotArchiveInfo = {
     | { type: "current" }
     | { type: "backup"; backupName: string; versionTime: string }
     | { type: "pre-restore-snapshot" }
+  /**
+   * The analytics.jsonl member, when the archive has one. Null when the site
+   * had no analytics to carry, or the server has no analytics stack.
+   */
+  analytics?: { siteUuid: string; rows: number } | null
 }
 
+/** The archive member holding the site's analytics events, when it has any. */
+export const ANALYTICS_MEMBER = "analytics.jsonl"
+
 /**
- * Package info.json + db.sql (in workDir) and a Ghost content directory into
- * a gzipped tarball with the layout: info.json, db.sql, content/…
+ * Package info.json + db.sql (+ analytics.jsonl when present, all in workDir)
+ * and a Ghost content directory into a gzipped tarball with the layout:
+ * info.json, db.sql, analytics.jsonl, content/…
  * Uses GNU tar so the content dir can be renamed without copying it first.
  */
 export async function packageSpotArchive({
@@ -55,6 +68,11 @@ export async function packageSpotArchive({
 
   const escapedBase = contentBase.replace(/\./g, "\\.")
 
+  const hasAnalytics = await fs
+    .stat(path.join(workDir, ANALYTICS_MEMBER))
+    .then((stat) => stat.isFile())
+    .catch(() => false)
+
   try {
     await execFileAsync(
       "tar",
@@ -69,6 +87,7 @@ export async function packageSpotArchive({
         workDir,
         "info.json",
         "db.sql",
+        ...(hasAnalytics ? [ANALYTICS_MEMBER] : []),
         "-C",
         contentParent,
         contentBase,
@@ -145,6 +164,8 @@ export type StagedRestore = {
   contentDir: string
   /** Plain SQL dump to import. */
   dbSqlPath: string
+  /** The site's analytics events (JSONEachRow), when the source carries them. */
+  analyticsJsonlPath: string | null
   /** info.json when the source was an export archive. */
   info: SpotArchiveInfo | null
 }
@@ -226,6 +247,21 @@ export async function validateStagedRestore({
         "This archive was created by a newer export format and may not restore cleanly.",
       )
     }
+
+    // The archive says it holds analytics but the member is gone — a
+    // repacked or truncated archive. Say so: the site's existing analytics
+    // are about to be left in place, which is not what the file promised.
+    if (staged.info.analytics && !staged.analyticsJsonlPath) {
+      warnings.push(
+        "This archive's visitor analytics could not be read, so the site's current analytics were left unchanged.",
+      )
+    }
+  }
+
+  if (!staged.analyticsJsonlPath && !staged.info?.analytics) {
+    warnings.push(
+      "This backup has no visitor analytics, so the site's current analytics were left unchanged.",
+    )
   }
 
   return warnings

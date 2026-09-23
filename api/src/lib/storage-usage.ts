@@ -1,5 +1,10 @@
 import mysql from "mysql2/promise"
 
+import {
+  clickhouseCommand,
+  clickhouseQuery,
+  SITE_TABLES,
+} from "./clickhouse.js"
 import { config } from "../config.js"
 import { EXCLUDED_DATABASES } from "./list-mysql-databases.js"
 import { mysqlConnectionOptions } from "./mysql-connectivity.js"
@@ -92,105 +97,13 @@ export type ClickhouseSiteUsage = {
   estimatedBytes: number
 }
 
+export { ClickhouseUnavailableError } from "./clickhouse.js"
+
 export type ClickhouseUsage = {
   tables: ClickhouseTableUsage[]
   sites: ClickhouseSiteUsage[]
 }
 
-export class ClickhouseUnavailableError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "ClickhouseUnavailableError"
-  }
-}
-
-const CLICKHOUSE_TIMEOUT_MS = 20 * 1000
-
-function clickhouseRequestUrl(params: Record<string, string> = {}): URL {
-  const url = new URL(config.clickhouseUrl!)
-  url.searchParams.set("database", config.clickhouseDatabase)
-
-  for (const [key, value] of Object.entries(params)) {
-    // ClickHouse's HTTP interface binds a `{name:Type}` placeholder in the
-    // query text to a `param_<name>` query-string value — this is how
-    // mutations below take a site uuid without string-building SQL.
-    url.searchParams.set(`param_${key}`, value)
-  }
-
-  return url
-}
-
-function clickhouseHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Content-Type": "text/plain",
-  }
-
-  if (config.clickhouseUser) {
-    headers["X-ClickHouse-User"] = config.clickhouseUser
-  }
-
-  if (config.clickhousePassword) {
-    headers["X-ClickHouse-Key"] = config.clickhousePassword
-  }
-
-  return headers
-}
-
-async function clickhouseFetch(
-  sql: string,
-  params: Record<string, string> = {},
-): Promise<Response> {
-  if (!config.clickhouseUrl) {
-    throw new ClickhouseUnavailableError("CLICKHOUSE_URL is not configured")
-  }
-
-  const url = clickhouseRequestUrl(params)
-
-  try {
-    return await fetch(url, {
-      method: "POST",
-      headers: clickhouseHeaders(),
-      body: sql,
-      signal: AbortSignal.timeout(CLICKHOUSE_TIMEOUT_MS),
-    })
-  } catch (error) {
-    throw new ClickhouseUnavailableError(
-      `Could not reach ClickHouse at ${url.origin}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    )
-  }
-}
-
-async function clickhouseQuery<T>(sql: string): Promise<T[]> {
-  const response = await clickhouseFetch(`${sql} FORMAT JSONEachRow`)
-  const text = await response.text()
-
-  if (!response.ok) {
-    throw new Error(`ClickHouse query failed (${response.status}): ${text}`)
-  }
-
-  return text
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as T)
-}
-
-/** Runs a statement with no result rows (an ALTER TABLE mutation here). */
-async function clickhouseCommand(
-  sql: string,
-  params: Record<string, string> = {},
-): Promise<void> {
-  const response = await clickhouseFetch(sql, params)
-
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`ClickHouse command failed (${response.status}): ${text}`)
-  }
-}
-
-/** Analytics tables whose rows are keyed by site_uuid. */
-const SITE_TABLES = ["analytics_events", "mv_hits"]
 
 export async function getClickhouseUsage(): Promise<ClickhouseUsage> {
   const db = config.clickhouseDatabase.replace(/'/g, "\\'")

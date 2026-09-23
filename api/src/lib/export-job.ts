@@ -1,6 +1,12 @@
 import { promises as fs } from "fs"
 import path from "path"
 
+import {
+  clickhouseConfigured,
+  countJsonlRows,
+  dumpSiteAnalytics,
+  readSiteUuidFromDump,
+} from "./clickhouse.js"
 import type { DataJobArtifact, JobHandle } from "./data-jobs.js"
 import { stageDuplicatiVersion } from "./duplicati-staging.js"
 import { UserFacingError } from "./errors.js"
@@ -10,6 +16,7 @@ import {
   getMysqlServerVersion,
 } from "./mysql-data.js"
 import {
+  ANALYTICS_MEMBER,
   gunzipFile,
   packageSpotArchive,
   SPOT_ARCHIVE_FORMAT_VERSION,
@@ -96,6 +103,7 @@ async function writeArtifact({
   contentDir,
   source,
   siteMetadataDatabase,
+  analytics,
   signal,
 }: {
   target: SpotDataTarget
@@ -104,13 +112,15 @@ async function writeArtifact({
   source: SpotArchiveInfo["source"]
   /** When set, siteTitle/ghost version are read live from this database. */
   siteMetadataDatabase: string | null
+  /** Describes the analytics.jsonl already written into workDir, if any. */
+  analytics: SpotArchiveInfo["analytics"]
   signal?: AbortSignal
 }): Promise<DataJobArtifact> {
   const now = new Date()
 
   const metadata = siteMetadataDatabase
     ? await getGhostSiteMetadata(siteMetadataDatabase)
-    : { siteTitle: null, ghostMigrationVersion: null }
+    : { siteTitle: null, ghostMigrationVersion: null, siteUuid: null }
 
   const info: SpotArchiveInfo = {
     formatVersion: SPOT_ARCHIVE_FORMAT_VERSION,
@@ -121,6 +131,7 @@ async function writeArtifact({
     ghostMigrationVersion: metadata.ghostMigrationVersion,
     createdAt: now.toISOString(),
     source,
+    analytics,
   }
 
   await fs.writeFile(
@@ -158,10 +169,72 @@ async function writeArtifact({
  * Build an export artifact of the spot's *current* data (live volume + fresh
  * dump). Also used as the pre-restore undo snapshot.
  */
+/**
+ * Dump the site's analytics into the archive's work dir.
+ *
+ * Never fatal: a site with no analytics stack, no site_uuid yet or an
+ * unreachable ClickHouse still gets a complete database + content export.
+ * The caller turns the returned message into a job warning.
+ */
+async function dumpAnalyticsForArchive({
+  database,
+  workDir,
+  signal,
+}: {
+  database: string
+  workDir: string
+  signal?: AbortSignal
+}): Promise<{
+  analytics: SpotArchiveInfo["analytics"]
+  warning: string | null
+}> {
+  if (!clickhouseConfigured()) {
+    return {
+      analytics: null,
+      warning:
+        "This server has no analytics store, so the export contains no visitor analytics.",
+    }
+  }
+
+  const { siteUuid } = await getGhostSiteMetadata(database)
+
+  if (!siteUuid) {
+    return {
+      analytics: null,
+      warning:
+        "This site has not recorded any visitor analytics yet, so the export contains none.",
+    }
+  }
+
+  try {
+    const { rows } = await dumpSiteAnalytics({
+      siteUuid,
+      destPath: path.join(workDir, ANALYTICS_MEMBER),
+      signal,
+    })
+
+    return { analytics: { siteUuid, rows }, warning: null }
+  } catch (error) {
+    if (signal?.aborted) {
+      throw error
+    }
+
+    console.error("Failed to dump site analytics", { database, error })
+    await fs.rm(path.join(workDir, ANALYTICS_MEMBER), { force: true })
+
+    return {
+      analytics: null,
+      warning:
+        "The site's visitor analytics could not be read, so the export contains none.",
+    }
+  }
+}
+
 export async function buildCurrentExportArtifact({
   target,
   workDir,
   source,
+  onWarning,
   signal,
 }: {
   target: SpotDataTarget
@@ -170,6 +243,8 @@ export async function buildCurrentExportArtifact({
     SpotArchiveInfo["source"],
     { type: "current" } | { type: "pre-restore-snapshot" }
   >
+  /** Called for anything the archive could not include (analytics, so far). */
+  onWarning?: (warning: string) => Promise<void> | void
   /** Aborts the dump and packaging (a cancelled job). */
   signal?: AbortSignal
 }): Promise<DataJobArtifact> {
@@ -190,12 +265,23 @@ export async function buildCurrentExportArtifact({
     signal,
   })
 
+  const { analytics, warning } = await dumpAnalyticsForArchive({
+    database: target.database,
+    workDir,
+    signal,
+  })
+
+  if (warning) {
+    await onWarning?.(warning)
+  }
+
   return writeArtifact({
     target,
     workDir,
     contentDir,
     source,
     siteMetadataDatabase: target.database,
+    analytics,
     signal,
   })
 }
@@ -223,6 +309,7 @@ export async function runExportJob({
         target,
         workDir,
         source: { type: "current" },
+        onWarning: (warning) => handle.addWarning(warning),
         signal: handle.signal,
       })
 
@@ -234,22 +321,58 @@ export async function runExportJob({
     await handle.setPhase("staging")
 
     const restoreDir = path.join(handle.workDir, "restore")
-    const { contentDir, dbDumpGzPath } = await stageDuplicatiVersion({
-      backupId: source.backupId,
-      versionTime: source.versionTime,
-      applicationUuid: target.applicationUuid,
-      database: target.database,
-      targetDir: restoreDir,
-      signal: handle.signal,
-    })
+    const { contentDir, dbDumpPath, dbDumpCompressed, analyticsDumpPath } =
+      await stageDuplicatiVersion({
+        backupId: source.backupId,
+        versionTime: source.versionTime,
+        applicationUuid: target.applicationUuid,
+        database: target.database,
+        targetDir: restoreDir,
+        signal: handle.signal,
+      })
 
     await handle.setPhase("packaging")
 
-    await gunzipFile({
-      sourcePath: dbDumpGzPath,
-      destPath: path.join(workDir, "db.sql"),
-      signal: handle.signal,
-    })
+    const dbSqlPath = path.join(workDir, "db.sql")
+
+    if (dbDumpCompressed) {
+      await gunzipFile({
+        sourcePath: dbDumpPath,
+        destPath: dbSqlPath,
+        signal: handle.signal,
+      })
+    } else {
+      await fs.copyFile(dbDumpPath, dbSqlPath)
+    }
+
+    // The backup holds the analytics as they were at that restore point —
+    // taken by the same pre-backup hook that wrote the SQL dump, so the
+    // archive is one consistent moment rather than old data beside live
+    // analytics. Live ClickHouse is deliberately not consulted here.
+    let analytics: SpotArchiveInfo["analytics"] = null
+
+    if (analyticsDumpPath) {
+      const destPath = path.join(workDir, ANALYTICS_MEMBER)
+      await fs.copyFile(analyticsDumpPath, destPath)
+
+      const siteUuid = await readSiteUuidFromDump(destPath)
+      const rows = await countJsonlRows(destPath)
+
+      if (siteUuid) {
+        analytics = { siteUuid, rows }
+      } else {
+        // No rows, so nothing identifies the site — an empty member would
+        // tell a restore to wipe the site's analytics, which this export
+        // cannot vouch for.
+        await fs.rm(destPath, { force: true })
+      }
+    }
+
+    if (!analytics) {
+      await handle.addWarning(
+        "This backup version has no visitor analytics, so the export contains none.",
+      )
+    }
 
     const artifact = await writeArtifact({
       target,
@@ -261,6 +384,7 @@ export async function runExportJob({
         versionTime: source.versionTime,
       },
       siteMetadataDatabase: null,
+      analytics,
       signal: handle.signal,
     })
 
