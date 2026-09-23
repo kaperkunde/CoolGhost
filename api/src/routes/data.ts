@@ -25,6 +25,10 @@ import {
 } from "../lib/export-job.js"
 import { runRestoreJob, type RestoreSource } from "../lib/restore-job.js"
 import {
+  filterVersionsForSite,
+  type SiteTarget,
+} from "../lib/site-restore-points.js"
+import {
   assertSafeDatabaseName,
   assertSafeName,
   resolveStagingRelativePath,
@@ -191,17 +195,52 @@ async function listFilesetsWithRetry(backupId: string) {
 }
 
 /**
+ * How long, from the start of a /backups request, checking versions for a
+ * site's data may take. The app gives the whole request 90 seconds; checks
+ * still running at this point finish in the background for the next listing.
+ */
+const SITE_FILTER_BUDGET_MS = 60 * 1000
+
+/** The site named by ?applicationUuid=&database=, or null for every version. */
+function parseSiteQuery(
+  query: import("express").Request["query"],
+): SiteTarget | null {
+  const applicationUuid = query["applicationUuid"]
+  const database = query["database"]
+
+  if (applicationUuid === undefined && database === undefined) {
+    return null
+  }
+
+  return {
+    applicationUuid: assertSafeName(
+      typeof applicationUuid === "string" ? applicationUuid : "",
+      "application uuid",
+    ),
+    database: assertSafeDatabaseName(
+      typeof database === "string" ? database : "",
+    ),
+  }
+}
+
+/**
  * List Duplicati backup jobs with their restorable versions. A job whose
  * versions could not be listed comes back with an empty list AND a
  * versionsError, so the caller can tell "no restore points" from "unknown".
+ *
+ * With ?applicationUuid=&database=, only the versions that hold that site's
+ * data are listed — the ones an export or restore of it can use.
  */
-dataRouter.get("/backups", async (_req, res) => {
+dataRouter.get("/backups", async (req, res) => {
+  const startedAt = Date.now()
+
   if (!duplicatiConfigured()) {
     res.json({ ok: true, configured: false, backups: [] })
     return
   }
 
   try {
+    const site = parseSiteQuery(req.query)
     const backups = await listDuplicatiBackups()
 
     const withVersions = await Promise.all(
@@ -211,7 +250,17 @@ dataRouter.get("/backups", async (_req, res) => {
       })),
     )
 
-    res.json({ ok: true, configured: true, backups: withVersions })
+    res.json({
+      ok: true,
+      configured: true,
+      backups: site
+        ? await filterVersionsForSite(
+            withVersions,
+            site,
+            startedAt + SITE_FILTER_BUDGET_MS,
+          )
+        : withVersions,
+    })
   } catch (error) {
     handleError(res, error)
   }

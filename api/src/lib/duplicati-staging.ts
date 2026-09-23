@@ -174,6 +174,60 @@ export type StagedDuplicatiVersion = {
   analyticsDumpPath: string | null
 }
 
+export type SiteDataInVersion =
+  | { found: true; dumpBackupPath: string }
+  | { found: false; missing: "content" | "dump" }
+
+/**
+ * Whether a backup version holds what staging needs for one site: its Ghost
+ * content volume and a database dump. The Backups list filters on this too,
+ * so the restore points it offers are exactly the ones staging accepts.
+ *
+ * Errors from the checks themselves (e.g. Duplicati busy or unreachable)
+ * propagate as-is rather than being reported as missing data.
+ */
+export async function locateSiteDataInVersion({
+  backupId,
+  versionTime,
+  applicationUuid,
+  database,
+}: {
+  backupId: string
+  versionTime: string
+  applicationUuid: string
+  database: string
+}): Promise<SiteDataInVersion> {
+  const hasVolume = await duplicatiVersionContainsPath({
+    backupId,
+    time: versionTime,
+    pathPrefix: ghostContentVolumeBackupPath(applicationUuid),
+  })
+
+  if (!hasVolume) {
+    return { found: false, missing: "content" }
+  }
+
+  // Dumps are plain SQL since analytics joined the backups; versions taken
+  // before that carry a gzipped one. Whichever this version has is the one
+  // restored and unpacked.
+  for (const dumpBackupPath of [
+    dbDumpBackupPath(database),
+    legacyDbDumpBackupPath(database),
+  ]) {
+    if (
+      await duplicatiVersionContainsPath({
+        backupId,
+        time: versionTime,
+        pathPrefix: dumpBackupPath,
+      })
+    ) {
+      return { found: true, dumpBackupPath }
+    }
+  }
+
+  return { found: false, missing: "dump" }
+}
+
 export async function stageDuplicatiVersion({
   backupId,
   versionTime,
@@ -199,46 +253,23 @@ export async function stageDuplicatiVersion({
   // common prefix is "/" and Duplicati recreates the full directory layout
   // under targetDir. (When only one path matches, Duplicati strips the whole
   // shared prefix — including the volume's _data/ folder — and the restored
-  // layout becomes unrecognizable.) Errors from the checks themselves (e.g.
-  // Duplicati busy or unreachable) propagate as-is rather than being
-  // misreported as a missing-data problem with the chosen version.
-  const hasVolume = await duplicatiVersionContainsPath({
+  // layout becomes unrecognizable.)
+  const located = await locateSiteDataInVersion({
     backupId,
-    time: versionTime,
-    pathPrefix: volumeBackupPath,
+    versionTime,
+    applicationUuid,
+    database,
   })
 
-  if (!hasVolume) {
+  if (!located.found) {
     throw new UserFacingError(
-      "This backup version does not contain data for this site. Pick a version taken while the site was deployed.",
+      located.missing === "content"
+        ? "This backup version does not contain data for this site. Pick a version taken while the site was deployed."
+        : "This backup version has the site's files but no database dump. It was likely taken before automatic database dumps covered this site — pick a newer version.",
     )
   }
 
-  // Dumps are plain SQL since analytics joined the backups; versions taken
-  // before that carry a gzipped one. Whichever this version has is the one
-  // restored and unpacked below.
-  const plainDumpPath = dbDumpBackupPath(database)
-  const legacyDumpPath = legacyDbDumpBackupPath(database)
-
-  const dumpBackupPath = (await duplicatiVersionContainsPath({
-    backupId,
-    time: versionTime,
-    pathPrefix: plainDumpPath,
-  }))
-    ? plainDumpPath
-    : (await duplicatiVersionContainsPath({
-          backupId,
-          time: versionTime,
-          pathPrefix: legacyDumpPath,
-        }))
-      ? legacyDumpPath
-      : null
-
-  if (!dumpBackupPath) {
-    throw new UserFacingError(
-      "This backup version has the site's files but no database dump. It was likely taken before automatic database dumps covered this site — pick a newer version.",
-    )
-  }
+  const { dumpBackupPath } = located
 
   // Analytics are a bonus, not a requirement: versions taken before they were
   // dumped, and servers with no analytics stack, simply have none. The export
