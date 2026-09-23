@@ -130,8 +130,8 @@ Endpoints (all require the bearer token): `GET /v1/data/backups` lists
 Duplicati jobs and their restorable versions (a job whose versions could not
 be listed carries `versionsError` instead of pretending to be empty; with
 `?applicationUuid=&database=` only the versions holding that site's content
-and database dump are listed — checks are cached, and one that fails or runs
-past the request's budget keeps its version); `POST /v1/data/spots/:spot/export`
+and database dump are listed — two Duplicati searches per job, and a job whose
+versions could not be checked carries `versionsError` too); `POST /v1/data/spots/:spot/export`
 and `POST /v1/data/spots/:spot/restore` start async jobs polled via
 `GET /v1/data/jobs/:id` (one job per spot at a time; a second start answers
 409 with the running job as `activeJob`). `POST /v1/data/jobs/:id/cancel`

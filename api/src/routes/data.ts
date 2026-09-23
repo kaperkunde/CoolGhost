@@ -194,13 +194,6 @@ async function listFilesetsWithRetry(backupId: string) {
   }
 }
 
-/**
- * How long, from the start of a /backups request, checking versions for a
- * site's data may take. The app gives the whole request 90 seconds; checks
- * still running at this point finish in the background for the next listing.
- */
-const SITE_FILTER_BUDGET_MS = 60 * 1000
-
 /** The site named by ?applicationUuid=&database=, or null for every version. */
 function parseSiteQuery(
   query: import("express").Request["query"],
@@ -232,8 +225,6 @@ function parseSiteQuery(
  * data are listed — the ones an export or restore of it can use.
  */
 dataRouter.get("/backups", async (req, res) => {
-  const startedAt = Date.now()
-
   if (!duplicatiConfigured()) {
     res.json({ ok: true, configured: false, backups: [] })
     return
@@ -254,11 +245,7 @@ dataRouter.get("/backups", async (req, res) => {
       ok: true,
       configured: true,
       backups: site
-        ? await filterVersionsForSite(
-            withVersions,
-            site,
-            startedAt + SITE_FILTER_BUDGET_MS,
-          )
+        ? await filterVersionsForSite(withVersions, site)
         : withVersions,
     })
   } catch (error) {

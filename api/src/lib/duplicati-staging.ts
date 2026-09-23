@@ -3,14 +3,18 @@ import path from "path"
 
 import { config } from "../config.js"
 import {
-  duplicatiVersionContainsPath,
+  DuplicatiError,
+  listDuplicatiFilesets,
+  searchDuplicatiVersions,
   startDuplicatiRestore,
   tryListDuplicatiDirectory,
   waitForDuplicatiTask,
+  type DuplicatiFileset,
 } from "./duplicati.js"
 import { UserFacingError } from "./errors.js"
 import {
   analyticsDumpBackupPath,
+  assertSafeDatabaseName,
   dbDumpBackupPath,
   ghostContentVolumeBackupPath,
   legacyDbDumpBackupPath,
@@ -174,58 +178,128 @@ export type StagedDuplicatiVersion = {
   analyticsDumpPath: string | null
 }
 
-export type SiteDataInVersion =
-  | { found: true; dumpBackupPath: string }
-  | { found: false; missing: "content" | "dump" }
+export type SiteDataInVersion = {
+  hasContent: boolean
+  /** The dump to restore: plain SQL, else the gzipped one older versions carry. */
+  dumpBackupPath: string | null
+  hasAnalytics: boolean
+}
+
+function sameVersions(a: DuplicatiFileset[], b: DuplicatiFileset[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (fileset, i) =>
+        fileset.version === b[i]!.version && fileset.time === b[i]!.time,
+    )
+  )
+}
+
+/** "/a/b/c/" → { folder: "/a/b/", name: "c" } */
+function splitBackupPath(backupPath: string): { folder: string; name: string } {
+  const trimmed = backupPath.replace(/\/+$/, "")
+
+  return {
+    folder: `${path.posix.dirname(trimmed)}/`,
+    name: path.posix.basename(trimmed),
+  }
+}
 
 /**
- * Whether a backup version holds what staging needs for one site: its Ghost
- * content volume and a database dump. The Backups list filters on this too,
- * so the restore points it offers are exactly the ones staging accepts.
+ * What each of a job's versions holds of one site, keyed by version time —
+ * two searches for the whole job, however many versions it keeps. Staging
+ * checks the chosen version with this and the Backups list filters on it, so
+ * the restore points offered are exactly the ones staging accepts.
  *
- * Errors from the checks themselves (e.g. Duplicati busy or unreachable)
- * propagate as-is rather than being reported as missing data.
+ * The searches number versions from the newest, so a backup finishing
+ * mid-check would shift every answer by one. The fileset listing is taken on
+ * both sides of them and the check repeats if it moved. `versions`, when
+ * given, is a listing the caller already has and stands in for the first.
+ *
+ * Errors from Duplicati propagate as-is rather than being reported as missing
+ * data.
  */
-export async function locateSiteDataInVersion({
+export async function findSiteDataVersions({
   backupId,
-  versionTime,
   applicationUuid,
   database,
+  versions,
 }: {
   backupId: string
-  versionTime: string
   applicationUuid: string
   database: string
-}): Promise<SiteDataInVersion> {
-  const hasVolume = await duplicatiVersionContainsPath({
-    backupId,
-    time: versionTime,
-    pathPrefix: ghostContentVolumeBackupPath(applicationUuid),
-  })
+  versions?: DuplicatiFileset[]
+}): Promise<Map<string, SiteDataInVersion>> {
+  const contentPath = ghostContentVolumeBackupPath(applicationUuid)
+  const plainDumpPath = dbDumpBackupPath(database)
+  const legacyDumpPath = legacyDbDumpBackupPath(database)
+  const analyticsPath = analyticsDumpBackupPath(database)
 
-  if (!hasVolume) {
-    return { found: false, missing: "content" }
-  }
+  const content = splitBackupPath(contentPath)
+  // The site's plain dump, gzipped dump and analytics all start "<db>.".
+  const dumps = splitBackupPath(plainDumpPath)
 
-  // Dumps are plain SQL since analytics joined the backups; versions taken
-  // before that carry a gzipped one. Whichever this version has is the one
-  // restored and unpacked.
-  for (const dumpBackupPath of [
-    dbDumpBackupPath(database),
-    legacyDbDumpBackupPath(database),
-  ]) {
-    if (
-      await duplicatiVersionContainsPath({
+  let before = versions ?? (await listDuplicatiFilesets(backupId))
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const [contentHits, dumpHits] = await Promise.all([
+      searchDuplicatiVersions({
         backupId,
-        time: versionTime,
-        pathPrefix: dumpBackupPath,
-      })
-    ) {
-      return { found: true, dumpBackupPath }
+        folder: content.folder,
+        nameFilter: content.name,
+      }),
+      searchDuplicatiVersions({
+        backupId,
+        folder: dumps.folder,
+        nameFilter: `${assertSafeDatabaseName(database)}.`,
+      }),
+    ])
+
+    const after = await listDuplicatiFilesets(backupId)
+
+    if (!sameVersions(before, after)) {
+      before = after
+      continue
     }
+
+    const timeOf = new Map(
+      after.map((fileset) => [fileset.version, fileset.time]),
+    )
+    const found = new Map<number, Set<string>>()
+
+    for (const hit of [...contentHits, ...dumpHits]) {
+      let paths = found.get(hit.version)
+
+      if (!paths) {
+        paths = new Set()
+        found.set(hit.version, paths)
+      }
+
+      paths.add(hit.path)
+    }
+
+    const result = new Map<string, SiteDataInVersion>()
+
+    for (const [version, time] of timeOf) {
+      const paths = found.get(version) ?? new Set<string>()
+
+      result.set(time, {
+        hasContent: paths.has(contentPath),
+        dumpBackupPath: paths.has(plainDumpPath)
+          ? plainDumpPath
+          : paths.has(legacyDumpPath)
+            ? legacyDumpPath
+            : null,
+        hasAnalytics: paths.has(analyticsPath),
+      })
+    }
+
+    return result
   }
 
-  return { found: false, missing: "dump" }
+  throw new DuplicatiError(
+    `Backup ${backupId} kept gaining versions while they were being checked`,
+  )
 }
 
 export async function stageDuplicatiVersion({
@@ -254,31 +328,37 @@ export async function stageDuplicatiVersion({
   // under targetDir. (When only one path matches, Duplicati strips the whole
   // shared prefix — including the volume's _data/ folder — and the restored
   // layout becomes unrecognizable.)
-  const located = await locateSiteDataInVersion({
-    backupId,
-    versionTime,
-    applicationUuid,
-    database,
-  })
+  const wanted = Date.parse(versionTime)
+  const inVersion = [
+    ...(
+      await findSiteDataVersions({ backupId, applicationUuid, database })
+    ).entries(),
+  ].find(([time]) => time === versionTime || Date.parse(time) === wanted)?.[1]
 
-  if (!located.found) {
+  if (!inVersion) {
     throw new UserFacingError(
-      located.missing === "content"
-        ? "This backup version does not contain data for this site. Pick a version taken while the site was deployed."
-        : "This backup version has the site's files but no database dump. It was likely taken before automatic database dumps covered this site — pick a newer version.",
+      "This backup version no longer exists. Pick another restore point.",
     )
   }
 
-  const { dumpBackupPath } = located
+  if (!inVersion.hasContent) {
+    throw new UserFacingError(
+      "This backup version does not contain data for this site. Pick a version taken while the site was deployed.",
+    )
+  }
+
+  const { dumpBackupPath } = inVersion
+
+  if (!dumpBackupPath) {
+    throw new UserFacingError(
+      "This backup version has the site's files but no database dump. It was likely taken before automatic database dumps covered this site — pick a newer version.",
+    )
+  }
 
   // Analytics are a bonus, not a requirement: versions taken before they were
   // dumped, and servers with no analytics stack, simply have none. The export
   // and restore jobs warn in that case rather than failing.
-  const hasAnalytics = await duplicatiVersionContainsPath({
-    backupId,
-    time: versionTime,
-    pathPrefix: analyticsBackupPath,
-  })
+  const { hasAnalytics } = inVersion
 
   signal?.throwIfAborted()
   await fs.mkdir(targetDir, { recursive: true })
