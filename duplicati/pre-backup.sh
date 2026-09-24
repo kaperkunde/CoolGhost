@@ -14,6 +14,16 @@
 # Duplicati compresses its own volumes, so the backup is no larger for it.
 set -euo pipefail
 
+# Duplicati runs --run-script-before ahead of every operation on the job, not
+# only a backup: a restore, a fileset listing, even a search in the Backups
+# tab. Dumping then costs a full mysqldump of every database per request and,
+# worse, empties and rewrites /data/db_dumps under a backup that is reading
+# it — which is how a version ends up with a site's SQL dump but not its
+# analytics. Run by hand (no operation name), it still dumps.
+if [[ "${DUPLICATI__OPERATIONNAME:-Backup}" != "Backup" ]]; then
+  exit 0
+fi
+
 DUMP_DIR="/data/db_dumps"
 MYSQL_HOST="${MYSQL_HOST:-mysql}"
 MYSQL_PORT="${MYSQL_PORT:-3306}"
