@@ -41,6 +41,7 @@ Browser ──▶ Caddy :3000 ──┬─▶ Ghost  :2368        (CMS + Admin)
    | `SERVICE_USER_MYSQL`    | ✅        | MySQL user for Ghost.                                                  |
    | `SERVICE_PASSWORD_MYSQL`| ✅        | MySQL password for Ghost.                                              |
    | `SERVICE_PASSWORD_MYSQLROOT` | ✅   | MySQL root password.                                                   |
+   | `SERVICE_PASSWORD_CLICKHOUSE` |     | ClickHouse `default` user password. Coolify generates it; elsewhere, set any secret. |
    | `MAIL_FROM`             | ✅        | Default from address, e.g. `Ghost <noreply@blog.example.com>`.         |
    | `MAIL_OPTIONS_AUTH_USER`| ✅        | Mailgun SMTP username.                                                 |
    | `MAIL_OPTIONS_AUTH_PASS`| ✅        | Mailgun SMTP password.                                                 |

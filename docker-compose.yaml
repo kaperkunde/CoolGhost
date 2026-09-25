@@ -86,6 +86,11 @@ services:
     environment:
       CLICKHOUSE_DB: ghost_analytics
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # The image rewrites the `default` user from this on every start, so
+      # existing volumes pick it up too. Coolify generates and keeps it, and
+      # traffic-stats below reads the same magic var. /ping needs no password,
+      # so the healthchecks are unaffected.
+      CLICKHOUSE_PASSWORD: ${SERVICE_PASSWORD_CLICKHOUSE}
     volumes:
       - ghost-clickhouse-data:/var/lib/clickhouse
     ulimits:
@@ -105,6 +110,7 @@ services:
       PORT: 3000
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ghost_analytics
+      CLICKHOUSE_PASSWORD: ${SERVICE_PASSWORD_CLICKHOUSE}
     depends_on:
       clickhouse:
         condition: service_healthy
