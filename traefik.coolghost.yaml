@@ -1,5 +1,9 @@
 # CoolGhost shared analytics routes for Coolify Traefik.
 #
+# The GhostHost API writes these same routes as coolghost-analytics.yaml when
+# a server is paired in the GhostHost admin (PUT /v1/proxy/analytics). Paste
+# this by hand only for a server without the API.
+#
 # Install once per server:
 #   Coolify → Server → Proxy → Dynamic Configurations → Add
 #   Paste this file after verifying the service URLs below resolve from

@@ -21,6 +21,11 @@ services:
       # api writes per-redirect dynamic configs there; Traefik hot-reloads.
       PROXY_DYNAMIC_DIR: /proxy-dynamic
       TRAEFIK_CERT_RESOLVER: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      # Where PUT /v1/proxy/analytics points the /.ghost/stats and
+      # /.ghost/analytics routes: the analytics stack's services by its custom
+      # name `ghost-analytics` + trailing dash, as Traefik reaches them.
+      ANALYTICS_STATS_URL: ${ANALYTICS_STATS_URL:-http://traffic-stats-ghost-analytics-:3000}
+      ANALYTICS_TRACKER_URL: ${ANALYTICS_TRACKER_URL:-http://traffic-analytics-ghost-analytics-:3000}
       # Analytics storage reporting: the shared analytics stack's ClickHouse
       # (Coolify custom name `ghost-analytics` + trailing dash).
       CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse-ghost-analytics-:8123}

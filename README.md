@@ -48,6 +48,8 @@ ClickHouse's `default` user is protected by Coolify's generated `SERVICE_PASSWOR
 
 Coolify already runs Traefik (`coolify-proxy`) on port 443. Each Ghost blog needs `/.ghost/stats` and `/.ghost/analytics` routed to the **shared** analytics stack on whatever domain Coolify assigns.
 
+Pairing the server in the GhostHost admin does this for you: it calls the API's `PUT /v1/proxy/analytics` (see [Analytics routes](#analytics-routes-v1proxyanalytics)), which writes these routes into Coolify's dynamic-config directory and checks both services answer. The manual steps below are for a server without the API, or to check by hand. Without the routes, the tracker's page hits and the admin's stats requests fall through to Ghost and 404 — nothing is recorded and the Analytics screen stays empty.
+
 1. Confirm analytics is reachable from the proxy:
 
    ```bash
@@ -238,6 +240,25 @@ because Traefik's file provider shares one namespace across all dynamic files.
 
 > **Note:** servers deployed before this feature need a one-time redeploy of
 > the `ghosthost-api` stack to pick up the `/proxy-dynamic` mount.
+
+#### Analytics routes (`/v1/proxy/analytics`)
+
+`PUT /v1/proxy/analytics` writes `coolghost-analytics.yaml` — the same routes
+as [`traefik.coolghost.yaml`](traefik.coolghost.yaml) — into the same
+directory, then checks that traffic-stats (`/v0/health`) and traffic-analytics
+answer at the addresses the routes use. It answers 200 when both do, and 502
+naming the one that did not (the file is still written). Idempotent; the
+GhostHost app calls it whenever a server is paired or its API settings change.
+
+| Variable                | Notes                                                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANALYTICS_STATS_URL`   | traffic-stats as Traefik reaches it; default `http://traffic-stats:3000` (all-in-one stack), `docker-compose.api.yaml` sets the split-stack name |
+| `ANALYTICS_TRACKER_URL` | traffic-analytics likewise; default `http://traffic-analytics:3000`                                                                     |
+
+The router names match `traefik.coolghost.yaml`, so a server that already
+carries a hand-pasted copy keeps working: Traefik loads one and skips the
+duplicate names with a warning. Remove the hand-pasted one once the API's is in
+place.
 
 #### Content storage (`/v1/storage/*`)
 
