@@ -8,9 +8,13 @@ import { config } from "../config.js"
  */
 
 export class DuplicatiError extends Error {
-  constructor(message: string) {
+  /** The request ran out of time, as opposed to Duplicati answering an error. */
+  readonly timedOut: boolean
+
+  constructor(message: string, { timedOut = false } = {}) {
     super(message)
     this.name = "DuplicatiError"
+    this.timedOut = timedOut
   }
 }
 
@@ -113,6 +117,7 @@ async function duplicatiRequest(
     if (isTimeout(error)) {
       throw new DuplicatiError(
         `Duplicati request ${path} timed out after ${timeoutMs}ms`,
+        { timedOut: true },
       )
     }
 
@@ -127,7 +132,9 @@ async function readJson<T>(response: Response, path: string): Promise<T> {
     return (await response.json()) as T
   } catch (error) {
     if (isTimeout(error)) {
-      throw new DuplicatiError(`Duplicati response for ${path} timed out`)
+      throw new DuplicatiError(`Duplicati response for ${path} timed out`, {
+        timedOut: true,
+      })
     }
 
     throw new DuplicatiError(
@@ -300,11 +307,30 @@ type RawFileset = {
   FileSizes?: number
 }
 
+/**
+ * The read of a job's local database in progress, if any. Duplicati 2.3 does
+ * not take these well concurrently: several v2 searches at once get some of
+ * them a 500 (a NullReferenceException inside BackupListing.ExecuteSearch),
+ * and a search overlapping a fileset listing can wait out a 30-second lock
+ * before answering — as long as this client's own timeout. A site's Backups
+ * list makes three such reads per job, and the page's listings overlap, so
+ * every one of them in this process queues behind the previous one.
+ */
+let databaseReads: Promise<unknown> = Promise.resolve()
+
+function oneDatabaseReadAtATime<T>(read: () => Promise<T>): Promise<T> {
+  const result = databaseReads.then(read, read)
+  databaseReads = result.catch(() => undefined)
+  return result
+}
+
 export async function listDuplicatiFilesets(
   backupId: string,
 ): Promise<DuplicatiFileset[]> {
-  const entries = await duplicatiFetch<RawFileset[]>(
-    `/api/v1/backup/${encodeURIComponent(backupId)}/filesets`,
+  const entries = await oneDatabaseReadAtATime(() =>
+    duplicatiFetch<RawFileset[]>(
+      `/api/v1/backup/${encodeURIComponent(backupId)}/filesets`,
+    ),
   )
 
   if (!Array.isArray(entries)) {
@@ -355,16 +381,18 @@ export async function searchDuplicatiVersions({
   const hits: DuplicatiSearchHit[] = []
 
   for (let page = 0; ; page++) {
-    const payload = await duplicatiFetch<unknown>("/api/v2/backup/search", {
-      method: "POST",
-      body: JSON.stringify({
-        BackupId: backupId,
-        Paths: [folder],
-        Filters: [nameFilter],
-        PageSize: SEARCH_PAGE_SIZE,
-        Page: page,
+    const payload = await oneDatabaseReadAtATime(() =>
+      duplicatiFetch<unknown>("/api/v2/backup/search", {
+        method: "POST",
+        body: JSON.stringify({
+          BackupId: backupId,
+          Paths: [folder],
+          Filters: [nameFilter],
+          PageSize: SEARCH_PAGE_SIZE,
+          Page: page,
+        }),
       }),
-    })
+    )
 
     const data = fieldOf(payload, "Data")
 

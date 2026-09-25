@@ -205,6 +205,45 @@ function splitBackupPath(backupPath: string): { folder: string; name: string } {
   }
 }
 
+const SEARCH_ATTEMPTS = 3
+const SEARCH_RETRY_DELAY_MS = 2000
+
+/**
+ * A search, retried when Duplicati answers it with an error. Searches already
+ * run one at a time (see searchDuplicatiVersions), which is what stops most of
+ * Duplicati's 500s; this covers a search that still overlaps one from another
+ * Duplicati client, such as its own web UI. A search that timed out is not
+ * retried: it already spent its 30 seconds, and the Backups list has to
+ * answer within the app's own time budget.
+ */
+async function searchWithRetry(
+  query: Parameters<typeof searchDuplicatiVersions>[0],
+): ReturnType<typeof searchDuplicatiVersions> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await searchDuplicatiVersions(query)
+    } catch (error) {
+      if (
+        !(error instanceof DuplicatiError) ||
+        error.timedOut ||
+        attempt >= SEARCH_ATTEMPTS
+      ) {
+        throw error
+      }
+
+      console.warn("Duplicati search failed, retrying", {
+        backupId: query.backupId,
+        folder: query.folder,
+        attempt,
+        error: error.message,
+      })
+      await new Promise((resolve) =>
+        setTimeout(resolve, SEARCH_RETRY_DELAY_MS * attempt),
+      )
+    }
+  }
+}
+
 /**
  * What each of a job's versions holds of one site, keyed by version time —
  * two searches for the whole job, however many versions it keeps. Staging
@@ -242,18 +281,16 @@ export async function findSiteDataVersions({
   let before = versions ?? (await listDuplicatiFilesets(backupId))
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const [contentHits, dumpHits] = await Promise.all([
-      searchDuplicatiVersions({
-        backupId,
-        folder: content.folder,
-        nameFilter: content.name,
-      }),
-      searchDuplicatiVersions({
-        backupId,
-        folder: dumps.folder,
-        nameFilter: `${assertSafeDatabaseName(database)}.`,
-      }),
-    ])
+    const contentHits = await searchWithRetry({
+      backupId,
+      folder: content.folder,
+      nameFilter: content.name,
+    })
+    const dumpHits = await searchWithRetry({
+      backupId,
+      folder: dumps.folder,
+      nameFilter: `${assertSafeDatabaseName(database)}.`,
+    })
 
     const after = await listDuplicatiFilesets(backupId)
 

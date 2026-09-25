@@ -51,8 +51,10 @@ function clickhouseHeaders(): Record<string, string> {
     "Content-Type": "text/plain",
   }
 
-  if (config.clickhouseUser) {
-    headers["X-ClickHouse-User"] = config.clickhouseUser
+  // ClickHouse rejects a key without a user ("Got an empty user name from
+  // X-ClickHouse HTTP headers"), so a password alone means the default user.
+  if (config.clickhouseUser || config.clickhousePassword) {
+    headers["X-ClickHouse-User"] = config.clickhouseUser || "default"
   }
 
   if (config.clickhousePassword) {
