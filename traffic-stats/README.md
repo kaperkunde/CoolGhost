@@ -36,6 +36,8 @@ Set via environment variables (defaults shown):
 | `LISTEN_HOST`               | `0.0.0.0`                 | Listen address.                      |
 | `CLICKHOUSE_URL`            | `http://clickhouse:8123`  | ClickHouse HTTP endpoint.            |
 | `CLICKHOUSE_DATABASE`       | `ghost_analytics`         | Database holding the analytics tables. |
+| `CLICKHOUSE_USER`           | `default`                 | ClickHouse user.                     |
+| `CLICKHOUSE_PASSWORD`       | _(empty)_                 | That user's password.                |
 | `TINYBIRD_EVENTS_DATASOURCE`| `analytics_events`        | Datasource name for ingested events. |
 | `TRUST_PROXY`               | `true`                    | Trust `X-Forwarded-*` from Caddy.    |
 
