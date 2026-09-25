@@ -1,0 +1,18 @@
+<!--
+  Per-query limits to match config.d/low-memory.xml: fewer threads and
+  smaller blocks per query, and spill large GROUP BY / ORDER BY to disk
+  instead of growing in RAM.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_threads>2</max_threads>
+            <max_block_size>8192</max_block_size>
+            <queue_max_wait_ms>1000</queue_max_wait_ms>
+            <input_format_parallel_parsing>0</input_format_parallel_parsing>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <max_bytes_before_external_group_by>134217728</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>134217728</max_bytes_before_external_sort>
+        </default>
+    </profiles>
+</clickhouse>
