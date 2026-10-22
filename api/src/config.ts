@@ -50,6 +50,16 @@ export const config = {
   proxyDynamicDir: optionalEnv("PROXY_DYNAMIC_DIR"),
   /** Cert resolver name in the Coolify-generated Traefik config. */
   traefikCertResolver: optionalEnv("TRAEFIK_CERT_RESOLVER") ?? "letsencrypt",
+  /**
+   * Where Traefik reaches the analytics stack for the /.ghost/stats and
+   * /.ghost/analytics routes (PUT /v1/proxy/analytics). The defaults are the
+   * all-in-one stack's service names; a split analytics resource is reached
+   * by its custom name with a trailing dash instead.
+   */
+  analyticsStatsUrl:
+    optionalEnv("ANALYTICS_STATS_URL") ?? "http://traffic-stats:3000",
+  analyticsTrackerUrl:
+    optionalEnv("ANALYTICS_TRACKER_URL") ?? "http://traffic-analytics:3000",
 
   // Analytics storage reporting. Optional — without CLICKHOUSE_URL the
   // /v1/storage/analytics route responds 503.

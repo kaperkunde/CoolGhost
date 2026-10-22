@@ -20,12 +20,30 @@ const KEY_REGEX = /^[a-z0-9][a-z0-9_-]{0,120}$/
 const HOSTNAME_REGEX =
   /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
 
-function redirectFilePath(key: string): string {
+function dynamicFilePath(fileName: string): string {
   if (!config.proxyDynamicDir) {
     throw new Error("PROXY_DYNAMIC_DIR is not configured")
   }
 
-  return path.join(config.proxyDynamicDir, `plekje-redirect-${key}.yaml`)
+  return path.join(config.proxyDynamicDir, fileName)
+}
+
+function redirectFilePath(key: string): string {
+  return dynamicFilePath(`plekje-redirect-${key}.yaml`)
+}
+
+/** Write + rename so Traefik's file watcher never sees a half-written file. */
+async function writeDynamicFile(filePath: string, contents: string) {
+  const tempPath = `${filePath}.${randomBytes(6).toString("hex")}.tmp`
+
+  try {
+    await mkdir(path.dirname(filePath), { recursive: true })
+    await writeFile(tempPath, contents, "utf8")
+    await rename(tempPath, filePath)
+  } catch (error) {
+    await unlink(tempPath).catch(() => {})
+    throw error
+  }
 }
 
 /**
@@ -131,22 +149,14 @@ proxyRouter.put("/redirects/:key", requireApiToken, async (req, res) => {
     return
   }
 
-  const filePath = redirectFilePath(key)
-  const tempPath = `${filePath}.${randomBytes(6).toString("hex")}.tmp`
-
   try {
-    await mkdir(path.dirname(filePath), { recursive: true })
-    // Write + rename so Traefik's file watcher never sees a half-written file.
-    await writeFile(
-      tempPath,
+    await writeDynamicFile(
+      redirectFilePath(key),
       buildRedirectYaml({ key, redirectDomain, targetDomain }),
-      "utf8",
     )
-    await rename(tempPath, filePath)
     res.json({ ok: true, key, redirectDomain, targetDomain })
   } catch (error) {
     console.error("Failed to write redirect proxy config", { key, error })
-    await unlink(tempPath).catch(() => {})
     res.status(500).json({ error: "Failed to write redirect config" })
   }
 })
@@ -173,4 +183,140 @@ proxyRouter.delete("/redirects/:key", requireApiToken, async (req, res) => {
     console.error("Failed to remove redirect proxy config", { key, error })
     res.status(500).json({ error: "Failed to remove redirect config" })
   }
+})
+
+/**
+ * The analytics routes every Ghost site on this server relies on: its tracker
+ * posts page hits to /.ghost/analytics and its admin reads stats from
+ * /.ghost/stats, on the site's own domain. Priority 2000 wins over each
+ * site's Host() router (and loses to a redirect domain's 3000). Same routes
+ * as traefik.coolghost.yaml, which is what a server set up by hand carries —
+ * the router names match it on purpose, so a server with both files keeps
+ * one working copy (Traefik skips a name it has already loaded).
+ */
+const ANALYTICS_FILE = "coolghost-analytics.yaml"
+
+function buildAnalyticsYaml({
+  statsUrl,
+  trackerUrl,
+}: {
+  statsUrl: string
+  trackerUrl: string
+}): string {
+  return `# Managed by the GhostHost API — Ghost analytics routes. Do not edit.
+http:
+  routers:
+    coolghost-stats-https:
+      rule: "PathPrefix(\`/.ghost/stats\`)"
+      entryPoints:
+        - https
+      service: coolghost-stats
+      middlewares:
+        - coolghost-stats-strip
+      priority: 2000
+      tls: {}
+    coolghost-analytics-https:
+      rule: "PathPrefix(\`/.ghost/analytics\`)"
+      entryPoints:
+        - https
+      service: coolghost-analytics
+      middlewares:
+        - coolghost-analytics-strip
+      priority: 2000
+      tls: {}
+    coolghost-stats-http:
+      rule: "PathPrefix(\`/.ghost/stats\`)"
+      entryPoints:
+        - http
+      middlewares:
+        - redirect-to-https
+      service: coolghost-stats
+      priority: 2000
+    coolghost-analytics-http:
+      rule: "PathPrefix(\`/.ghost/analytics\`)"
+      entryPoints:
+        - http
+      middlewares:
+        - redirect-to-https
+      service: coolghost-analytics
+      priority: 2000
+  middlewares:
+    coolghost-stats-strip:
+      stripPrefix:
+        prefixes:
+          - /.ghost/stats
+    coolghost-analytics-strip:
+      stripPrefix:
+        prefixes:
+          - /.ghost/analytics
+  services:
+    coolghost-stats:
+      loadBalancer:
+        servers:
+          - url: ${JSON.stringify(statsUrl)}
+    coolghost-analytics:
+      loadBalancer:
+        servers:
+          - url: ${JSON.stringify(trackerUrl)}
+`
+}
+
+const UPSTREAM_CHECK_TIMEOUT_MS = 5_000
+
+/** Whether an analytics service answers at the address the routes point to. */
+async function upstreamAnswers(url: string, expect: RegExp): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(UPSTREAM_CHECK_TIMEOUT_MS),
+    })
+    return response.ok && expect.test(await response.text())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Install (or refresh) the analytics routes, then check both services answer
+ * where the routes send traffic. Idempotent: the GhostHost app calls it each
+ * time a server is paired. The file is written even when a check fails — the
+ * routes are right, it is the analytics stack that needs looking at — and the
+ * failure is reported so pairing does not pass silently.
+ */
+proxyRouter.put("/analytics", requireApiToken, async (_req, res) => {
+  if (!requireProxyDir(res)) return
+
+  const statsUrl = config.analyticsStatsUrl
+  const trackerUrl = config.analyticsTrackerUrl
+
+  try {
+    await writeDynamicFile(
+      dynamicFilePath(ANALYTICS_FILE),
+      buildAnalyticsYaml({ statsUrl, trackerUrl }),
+    )
+  } catch (error) {
+    console.error("Failed to write analytics proxy config", { error })
+    res.status(500).json({ error: "Failed to write the analytics routes." })
+    return
+  }
+
+  const [statsOk, trackerOk] = await Promise.all([
+    upstreamAnswers(`${statsUrl}/v0/health`, /ok/),
+    upstreamAnswers(`${trackerUrl}/`, /Ghost/),
+  ])
+
+  const unreachable = [
+    ...(statsOk ? [] : [`traffic-stats at ${statsUrl}`]),
+    ...(trackerOk ? [] : [`traffic-analytics at ${trackerUrl}`]),
+  ]
+
+  if (unreachable.length > 0) {
+    res.status(502).json({
+      error: `Analytics routes written to ${ANALYTICS_FILE}, but ${unreachable.join(
+        " and ",
+      )} did not answer. Check the analytics stack is running and on the coolify network (ANALYTICS_STATS_URL / ANALYTICS_TRACKER_URL).`,
+    })
+    return
+  }
+
+  res.json({ ok: true, file: ANALYTICS_FILE, statsUrl, trackerUrl })
 })
