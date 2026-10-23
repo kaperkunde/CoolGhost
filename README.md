@@ -79,6 +79,8 @@ That's why:
 
 The ClickHouse schema (events table + materialized view) is created automatically on first boot from [`clickhouse/init/01_schema.sql`](clickhouse/init/01_schema.sql).
 
+ClickHouse's own `system.*_log` tables, which stock ClickHouse keeps for ever and which reach gigabytes long before a small site's page hits do, are switched off; a volume created before that has them dropped on its next start ([`clickhouse/config.d/system-logs.xml`](clickhouse/config.d/system-logs.xml)). Analytics are kept without a time limit.
+
 ## License
 
 [MIT](LICENSE)
