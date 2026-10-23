@@ -19,6 +19,8 @@ For the full project overview, architecture, and analytics behaviour, see the [`
 
 The shared stack idles at roughly 1 GB (ClickHouse ~160 MB, traffic-analytics ~250 MB, MySQL ~135 MB, Duplicati ~130–500 MB, plus the api and proxy), and each Ghost site adds ~150–200 MB. Plan on **4 GB RAM**, or **2 GB with swap**, before the first site.
 
+On disk, ClickHouse holds the analytics and nothing else: its own `system.*_log` tables, which stock ClickHouse keeps for ever and which reach gigabytes long before a small site's page hits do, are switched off, and an existing volume has them dropped on the next start (`clickhouse/config.d/system-logs.xml`). Analytics are kept without a time limit.
+
 Cloud images usually ship without swap, and with none a memory spike ends in the kernel OOM killer taking out MySQL or ClickHouse; after enough restarts Coolify stops the stack for good. Add a swap file once per server:
 
 ```bash

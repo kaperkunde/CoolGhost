@@ -1,0 +1,78 @@
+<!--
+  Keep ClickHouse's own logging from outgrowing the analytics it serves.
+
+  Stock, the server writes a dozen system.*_log tables with no TTL at all, so
+  they grow for ever: text_log copies every server log line at trace level,
+  and trace_log, metric_log and asynchronous_metric_log sample the server
+  every second whether anyone queries it or not. On a small site the
+  analytics tables stay in the megabytes while these reach gigabytes, and
+  every backup of the volume carries them along.
+
+  Nothing in this stack reads any of them, so they are switched off rather
+  than kept with a TTL. Switching a log off only stops new rows: the table it
+  wrote stays on disk, so startup_scripts below drops whatever an earlier
+  configuration left behind. DROP ... IF EXISTS makes that idempotent: it
+  frees the space on the first start after an upgrade and does nothing after
+  that.
+
+  To keep one of these logs, re-enable it in a later config.d file, give it a
+  <ttl> (e.g. event_date + INTERVAL 30 DAY DELETE), and take its DROP out of
+  startup_scripts, or the table is emptied on every start.
+
+  On a ClickHouse upgrade, compare the *_log sections of the new default
+  config.xml with the list below: new versions add logs that are on by
+  default (query_metric_log arrived in 24.10).
+-->
+<clickhouse>
+    <!-- The file log, inside the container rather than the volume: trace by
+         default, rotated at 1000M x 10. Warnings and errors are what is
+         worth keeping. -->
+    <logger>
+        <level>warning</level>
+        <size>100M</size>
+        <count>3</count>
+    </logger>
+
+    <query_log remove="1" />
+    <trace_log remove="1" />
+    <query_thread_log remove="1" />
+    <query_views_log remove="1" />
+    <part_log remove="1" />
+    <text_log remove="1" />
+    <metric_log remove="1" />
+    <query_metric_log remove="1" />
+    <error_log remove="1" />
+    <asynchronous_metric_log remove="1" />
+    <opentelemetry_span_log remove="1" />
+    <!-- Normally empty; a fatal error's stack trace also reaches the file
+         log above. -->
+    <crash_log remove="1" />
+    <processors_profile_log remove="1" />
+    <asynchronous_insert_log remove="1" />
+    <backup_log remove="1" />
+    <s3queue_log remove="1" />
+    <blob_storage_log remove="1" />
+
+    <!-- Run once per server start, after the system database is loaded and
+         before the server accepts connections. SYNC frees the disk at once
+         instead of after the Atomic database's eight-minute delay. -->
+    <startup_scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.query_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.trace_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.query_thread_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.query_views_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.part_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.text_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.metric_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.query_metric_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.error_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.asynchronous_metric_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.opentelemetry_span_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.crash_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.processors_profile_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.asynchronous_insert_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.backup_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.s3queue_log SYNC</query></scripts>
+        <scripts><query>DROP TABLE IF EXISTS system.blob_storage_log SYNC</query></scripts>
+    </startup_scripts>
+</clickhouse>
