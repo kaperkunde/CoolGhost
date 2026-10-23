@@ -1,6 +1,6 @@
 services:
   ghost:
-    image: ghost:${GHOST_VERSION:-6.53.0-alpine@sha256:63b12cb176ffe9cfe651b839c18f6c7261004370f566d9ae218cacd67766b2b1}
+    image: ghost:${GHOST_VERSION:-6.72.0-alpine@sha256:cd617a0901e659cda978b9063f449535d105f5f1a0340ffac415db2c42d22606}
     restart: always
     expose:
       - "2368"
