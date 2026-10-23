@@ -39,7 +39,7 @@ services:
       retries: 30
       start_period: 15s
   traffic-analytics:
-    image: ghost/traffic-analytics:${TRAFFIC_ANALYTICS_VERSION:-1.0.244@sha256:98aba0319ef32634c1be41362a322343e71dc8ac6bd31b426a8e115ad14c3b8e}
+    image: ghost/traffic-analytics:${TRAFFIC_ANALYTICS_VERSION:-1.0.497@sha256:c3d2e908b1c6594fd014ae57f790b66212b216d01f700e2abdd5ed5612585f1c}
     platform: linux/amd64
     restart: always
     environment:
