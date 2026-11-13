@@ -18,7 +18,7 @@ Ghost Admin ──▶ Caddy /.ghost/stats/* ──▶ traffic-stats ──▶ Cl
 
 | Route                       | Description                                                              |
 | --------------------------- | ------------------------------------------------------------------------ |
-| `GET /v0/health`            | Liveness check (`{"status":"ok"}`).                                      |
+| `GET /v0/health`            | Health check: `{"status":"ok"}`, or `503` when ClickHouse is unreachable. |
 | `GET /v0/pipes/<name>.json` | Run a named pipe. Auth via `Authorization: Bearer <jwt>` or `?token=`.   |
 | `POST /v0/events`           | Ingest endpoint (used by `traffic-analytics`).                           |
 
@@ -53,3 +53,5 @@ npm start        # node dist/server.js
 ```
 
 The service is built and run as part of the root `docker-compose.yaml` (`build: ./traffic-stats`); you normally don't run it directly.
+
+There are no automated tests yet; CI (`.github/workflows/ci.yml`) type-checks and builds it, and builds its image.
