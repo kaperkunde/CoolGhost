@@ -9,3 +9,10 @@ services:
   caddy:
     ports:
       - "${CADDY_PORT:-3000}:${CADDY_PORT:-3000}"
+    # The base file names the upstreams <service>.<project>, which Coolify's
+    # network (named after the project) resolves. Plain Compose names its
+    # network <project>_default, so locally the bare service names are used.
+    environment:
+      - GHOST_UPSTREAM=ghost
+      - TRAFFIC_STATS_UPSTREAM=traffic-stats
+      - TRAFFIC_ANALYTICS_UPSTREAM=traffic-analytics

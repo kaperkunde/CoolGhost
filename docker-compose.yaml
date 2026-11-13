@@ -24,6 +24,7 @@ services:
       start_period: 120s
   ghost:
     image: ghost:${GHOST_VERSION:-6.72.0-alpine@sha256:cd617a0901e659cda978b9063f449535d105f5f1a0340ffac415db2c42d22606}
+    restart: always
     environment:
       url: ${SERVICE_URL_CADDY}
       NODE_ENV: production
