@@ -1,7 +1,8 @@
 import type {FastifyInstance} from 'fastify';
-import {config} from '../config.js';
+import type {Config} from '../config.js';
 import {getClickHouse, pingClickHouse} from '../lib/clickhouse.js';
-import {GHOST_PIPE_NAMES, verifyPipeToken, type GhostPipeName} from '../lib/jwt.js';
+import {GHOST_PIPE_NAMES, type GhostPipeName, type PipeTokenVerifier} from '../lib/jwt.js';
+import {bearerMatches} from '../lib/keys.js';
 import {normalizeClickHouseDateTime} from '../lib/timestamp.js';
 import {runPipe} from '../pipes/registry.js';
 
@@ -41,7 +42,10 @@ function parseEventLines(body: string): AnalyticsEventRow[] {
   return rows;
 }
 
-export async function registerV0Routes(app: FastifyInstance) {
+export async function registerV0Routes(
+  app: FastifyInstance,
+  {config, verifyPipeToken}: {config: Config; verifyPipeToken: PipeTokenVerifier}
+) {
   app.get('/v0/health', async (_req, reply) => {
     const ok = await pingClickHouse();
     if (!ok) {
@@ -50,7 +54,15 @@ export async function registerV0Routes(app: FastifyInstance) {
     return {status: 'ok'};
   });
 
-  app.post('/v0/events', async (req, reply) => {
+  app.post('/v0/events', {
+    // Only traffic-analytics writes events, with its TINYBIRD_TRACKER_TOKEN.
+    // Checked before the body is read.
+    onRequest: async (req, reply) => {
+      if (!bearerMatches(req.headers.authorization, config.ingestToken)) {
+        return reply.status(401).send({error: 'Missing or invalid ingest token'});
+      }
+    }
+  }, async (req, reply) => {
     const name = (req.query as {name?: string}).name;
     if (name && name !== config.eventsDatasource) {
       return reply.status(400).send({error: `Unknown datasource: ${name}`});
@@ -89,16 +101,16 @@ export async function registerV0Routes(app: FastifyInstance) {
       url: `/v0/pipes/${pipe}.json`,
       handler: async (req, reply) => {
         const query = req.query as {token?: string};
-        const check = verifyPipeToken(req.headers.authorization, query.token, pipe);
+        const check = await verifyPipeToken(req.headers.authorization, query.token, pipe);
 
         if (!check.ok) {
-          return reply.status(403).send({error: check.error});
+          return reply.status(check.status).send({error: check.error});
         }
 
         try {
           const result = await runPipe(
             pipe as GhostPipeName,
-            check.siteUuid!,
+            check.siteUuid,
             req.query as Record<string, string | string[] | undefined>
           );
           return result;

@@ -5,6 +5,45 @@ export function queryString(query: PipeQueryParams, key: string): string | undef
   return typeof value === 'string' ? value : undefined;
 }
 
+/** The longest stretch one request may ask about. Ghost's own ranges stop at a year. */
+export const MAX_RANGE_DAYS = 400;
+
+const DAY_MS = 864e5;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function isoDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function parseDay(value: string | undefined): number | null {
+  if (!value || !DATE_PATTERN.test(value)) {
+    return null;
+  }
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * The `date_from`/`date_to` a pipe runs over: defaults where missing or not a
+ * YYYY-MM-DD date, swapped when reversed, and at most MAX_RANGE_DAYS long
+ * (the end kept, the start moved up).
+ */
+export function dateRange(
+  query: PipeQueryParams,
+  defaultDays: number,
+  now: number = Date.now()
+): {dateFrom: string; dateTo: string} {
+  let to = parseDay(queryString(query, 'date_to')) ?? Date.parse(`${isoDay(now)}T00:00:00Z`);
+  let from = parseDay(queryString(query, 'date_from')) ?? to - defaultDays * DAY_MS;
+  if (from > to) {
+    [from, to] = [to, from];
+  }
+  if (to - from > (MAX_RANGE_DAYS - 1) * DAY_MS) {
+    from = to - (MAX_RANGE_DAYS - 1) * DAY_MS;
+  }
+  return {dateFrom: isoDay(from), dateTo: isoDay(to)};
+}
+
 export type HitsFilter = {
   whereSql: string;
   queryParams: Record<string, string | string[] | number>;
@@ -13,12 +52,9 @@ export type HitsFilter = {
 };
 
 export function buildHitsFilter(siteUuid: string, query: PipeQueryParams): HitsFilter {
-  const dateFrom =
-    queryString(query, 'date_from') ??
-    new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-  const dateTo = queryString(query, 'date_to') ?? new Date().toISOString().slice(0, 10);
-  const limit = Math.min(Number(queryString(query, 'limit') ?? 50) || 50, 500);
-  const skip = Number(queryString(query, 'skip') ?? 0) || 0;
+  const {dateFrom, dateTo} = dateRange(query, 30);
+  const limit = Math.min(Math.max(Math.floor(Number(queryString(query, 'limit') ?? 50)) || 50, 1), 500);
+  const skip = Math.min(Math.max(Math.floor(Number(queryString(query, 'skip') ?? 0)) || 0, 0), 100_000);
 
   const queryParams: Record<string, string | string[] | number> = {siteUuid, dateFrom, dateTo};
   const clauses = [

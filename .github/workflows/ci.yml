@@ -31,6 +31,8 @@ jobs:
           SERVICE_PASSWORD_MYSQL: example
           SERVICE_PASSWORD_MYSQLROOT: example
           SERVICE_PASSWORD_CLICKHOUSE: example
+          SERVICE_PASSWORD_64_STATS: example
+          SERVICE_PASSWORD_64_INGEST: example
           MAIL_FROM: Ghost <noreply@blog.example.com>
           MAIL_OPTIONS_HOST: smtp.example.com
           MAIL_OPTIONS_AUTH_USER: example
@@ -41,10 +43,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Build traffic-stats
+      - name: Test and build traffic-stats
         working-directory: traffic-stats
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
+          npm test
           npm run build
 
       - name: Build the images

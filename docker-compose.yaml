@@ -46,7 +46,9 @@ services:
       analytics__enabled: "true"
       tinybird__tracker__endpoint: ${SERVICE_URL_CADDY}/.ghost/analytics/api/v1/page_hit
       labs__publicAPI: ${LABS_PUBLIC_API:-false}
-      tinybird__adminToken: DUMMY_TOKEN
+      # Signs the stats requests Ghost Admin and the Ghost server make;
+      # traffic-stats checks them with the same value. Coolify generates it.
+      tinybird__adminToken: ${SERVICE_PASSWORD_64_STATS}
       tinybird__workspaceId: DUMMY_WORKSPACE_ID
       tinybird__tracker__datasource: analytics_events
       tinybird__stats__endpoint: ${SERVICE_URL_CADDY}/.ghost/stats
@@ -112,6 +114,11 @@ services:
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ghost_analytics
       CLICKHOUSE_PASSWORD: ${SERVICE_PASSWORD_CLICKHOUSE}
+      # Ghost's tinybird__adminToken: the secret stats tokens are signed with.
+      TINYBIRD_ADMIN_TOKEN: ${SERVICE_PASSWORD_64_STATS}
+      TINYBIRD_WORKSPACE_ID: DUMMY_WORKSPACE_ID
+      # What traffic-analytics sends to /v0/events (its TINYBIRD_TRACKER_TOKEN).
+      TRAFFIC_STATS_INGEST_TOKEN: ${SERVICE_PASSWORD_64_INGEST}
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -127,6 +134,8 @@ services:
     restart: always
     environment:
       PROXY_TARGET: http://traffic-stats:3000/v0/events
+      # Sent as a Bearer token with every page hit it forwards.
+      TINYBIRD_TRACKER_TOKEN: ${SERVICE_PASSWORD_64_INGEST}
       TINYBIRD_WAIT: "true"
       TRUST_PROXY: "true"
     depends_on:

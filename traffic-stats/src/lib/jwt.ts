@@ -1,5 +1,7 @@
 import jwt from 'jsonwebtoken';
-import {config} from '../config.js';
+import {LEGACY_ADMIN_TOKEN, type Config} from '../config.js';
+import {DERIVED_WORKSPACE_PATTERN, deriveSiteKey} from './keys.js';
+import type {SiteLookup} from './site-lookup.js';
 
 /** Pipe names Ghost may request (from tinybird-service.js). */
 export const GHOST_PIPE_NAMES = [
@@ -31,9 +33,30 @@ export const GHOST_PIPE_NAMES = [
 
 export type GhostPipeName = (typeof GHOST_PIPE_NAMES)[number];
 
+/** Ghost asks for tokens that last three hours; anything much longer is not one of its own. */
+export const MAX_TOKEN_LIFETIME_SECONDS = 24 * 60 * 60;
+
+export type PipeTokenCheck =
+  | {ok: true; siteUuid: string}
+  | {ok: false; status: 403 | 503; error: string};
+
+export type PipeTokenVerifier = (
+  authorization: string | undefined,
+  queryToken: unknown,
+  pipeName: string
+) => Promise<PipeTokenCheck>;
+
+type KeyMode = 'site' | 'derived' | 'legacy';
+
+type Scope = {
+  type?: unknown;
+  resource?: unknown;
+  fixed_params?: {site_uuid?: unknown};
+};
+
 function extractJwtToken(authorization: string | undefined, queryToken: unknown): string | null {
   if (authorization?.startsWith('Bearer ')) {
-    return authorization.slice(7);
+    return authorization.slice(7).trim() || null;
   }
   if (typeof queryToken === 'string' && queryToken.length > 0) {
     return queryToken;
@@ -41,48 +64,112 @@ function extractJwtToken(authorization: string | undefined, queryToken: unknown)
   return null;
 }
 
-export function verifyPipeToken(
-  authorization: string | undefined,
-  queryToken: unknown,
-  pipeName: string
-): {
-  ok: boolean;
-  siteUuid?: string;
-  error?: string;
-} {
-  const token = extractJwtToken(authorization, queryToken);
-  if (!token) {
-    return {ok: false, error: 'Missing Bearer token'};
+function refuse(error: string, status: 403 | 503 = 403): PipeTokenCheck {
+  return {ok: false, status, error};
+}
+
+/** The secrets a token naming this workspace may be signed with, in the order tried. */
+function candidateKeys(
+  config: Pick<Config, 'adminToken' | 'workspaceId' | 'masterKey' | 'allowLegacyToken'>,
+  workspaceId: string
+): Array<{key: string; mode: KeyMode}> {
+  const keys: Array<{key: string; mode: KeyMode}> = [];
+  if (config.adminToken && workspaceId === config.workspaceId) {
+    keys.push({key: config.adminToken, mode: 'site'});
   }
+  if (config.masterKey && DERIVED_WORKSPACE_PATTERN.test(workspaceId)) {
+    keys.push({key: deriveSiteKey(config.masterKey, workspaceId), mode: 'derived'});
+  }
+  // While the flag is on, a site that still signs with the placeholder may
+  // already name its own workspace (a host moving sites to derived keys).
+  if (config.allowLegacyToken) {
+    keys.push({key: LEGACY_ADMIN_TOKEN, mode: 'legacy'});
+  }
+  return keys;
+}
 
-  try {
-    const decoded = jwt.verify(token, config.tinybirdAdminToken) as jwt.JwtPayload;
-
-    if (decoded.workspace_id !== config.tinybirdWorkspaceId) {
-      return {ok: false, error: 'Invalid workspace'};
+/**
+ * Checks the stats token Ghost signs (tinybird-service.js: HS256 over
+ * `{workspace_id, name, exp, scopes: [{type: 'PIPES:READ', resource, fixed_params: {site_uuid}}]}`)
+ * and answers the one site it may read.
+ */
+export function createPipeTokenVerifier({
+  config,
+  lookupSite = null,
+  now = Date.now
+}: {
+  config: Pick<Config, 'adminToken' | 'workspaceId' | 'masterKey' | 'allowLegacyToken'>;
+  lookupSite?: SiteLookup | null;
+  now?: () => number;
+}): PipeTokenVerifier {
+  return async (authorization, queryToken, pipeName) => {
+    const token = extractJwtToken(authorization, queryToken);
+    if (!token) {
+      return refuse('Missing Bearer token');
     }
 
-    const scopes = decoded.scopes as Array<{
-      type: string;
-      resource: string;
-      fixed_params?: {site_uuid?: string};
-    }> | undefined;
+    const decoded = jwt.decode(token, {complete: true});
+    if (!decoded || typeof decoded.payload !== 'object' || decoded.header.alg !== 'HS256') {
+      return refuse('Invalid token');
+    }
+    const workspaceId = (decoded.payload as jwt.JwtPayload).workspace_id;
+    if (typeof workspaceId !== 'string' || !workspaceId) {
+      return refuse('Invalid token');
+    }
 
-    const allowed = scopes?.some(
-      (s) => s.type === 'PIPES:READ' && s.resource === pipeName
-    );
+    const nowSeconds = Math.floor(now() / 1000);
+    let payload: jwt.JwtPayload | null = null;
+    let mode: KeyMode | null = null;
+    for (const candidate of candidateKeys(config, workspaceId)) {
+      try {
+        const verified = jwt.verify(token, candidate.key, {
+          algorithms: ['HS256'],
+          clockTimestamp: nowSeconds
+        });
+        if (typeof verified === 'object') {
+          payload = verified;
+          mode = candidate.mode;
+          break;
+        }
+      } catch {
+        // Try the next secret this workspace may use.
+      }
+    }
+    if (!payload || !mode) {
+      return refuse('Invalid token');
+    }
 
+    if (typeof payload.exp !== 'number') {
+      return refuse('Token has no expiry');
+    }
+    if (payload.exp > nowSeconds + MAX_TOKEN_LIFETIME_SECONDS) {
+      return refuse('Token lasts too long');
+    }
+
+    const scopes: Scope[] = Array.isArray(payload.scopes) ? payload.scopes : [];
+    const allowed = scopes.some((s) => s.type === 'PIPES:READ' && s.resource === pipeName);
     if (!allowed) {
-      return {ok: false, error: 'Pipe not in token scope'};
+      return refuse('Pipe not in token scope');
     }
 
-    const siteUuid = scopes?.find((s) => s.resource === pipeName)?.fixed_params?.site_uuid;
-    if (!siteUuid) {
-      return {ok: false, error: 'Missing site_uuid in token'};
+    const siteUuids = new Set(scopes.map((s) => s.fixed_params?.site_uuid));
+    const [siteUuid] = siteUuids;
+    if (siteUuids.size !== 1 || typeof siteUuid !== 'string' || !siteUuid) {
+      return refuse('Token must name one site_uuid in every scope');
+    }
+
+    if (mode === 'derived' && lookupSite) {
+      const site = await lookupSite(workspaceId);
+      if (!site.ok) {
+        return site.reason === 'not_found'
+          ? refuse('Unknown workspace')
+          : refuse('Site lookup unavailable', 503);
+      }
+      if (site.siteUuid !== siteUuid) {
+        return refuse('Token not valid for this site');
+      }
     }
 
     return {ok: true, siteUuid};
-  } catch {
-    return {ok: false, error: 'Invalid token'};
-  }
+  };
 }
