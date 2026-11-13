@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # GitHub-hosted by default; the CI_RUNNER repository variable can name
+    # another runner without a change here.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compose renders with .env.example
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yaml config --quiet
+          docker compose -f docker-compose.yaml -f docker-compose.local.yaml config --quiet
+          rm .env
+
+      - name: Compose renders with Coolify's variables
+        env:
+          SERVICE_URL_CADDY: https://blog.example.com
+          SERVICE_USER_MYSQL: ghost
+          SERVICE_PASSWORD_MYSQL: example
+          SERVICE_PASSWORD_MYSQLROOT: example
+          SERVICE_PASSWORD_CLICKHOUSE: example
+          MAIL_FROM: Ghost <noreply@blog.example.com>
+          MAIL_OPTIONS_HOST: smtp.example.com
+          MAIL_OPTIONS_AUTH_USER: example
+          MAIL_OPTIONS_AUTH_PASS: example
+        run: docker compose -f docker-compose.yaml config --quiet
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Build traffic-stats
+        working-directory: traffic-stats
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Build the images
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yaml build
