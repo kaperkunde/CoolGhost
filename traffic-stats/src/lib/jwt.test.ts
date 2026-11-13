@@ -114,8 +114,11 @@ describe('legacy flag', () => {
     const on = createPipeTokenVerifier({config: {...base, masterKey: MASTER, allowLegacyToken: true}, now: () => NOW});
     const token = ghostToken({key: 'DUMMY_TOKEN'});
     assert.deepEqual(await on(`Bearer ${token}`, undefined, 'api_kpis'), {ok: true, siteUuid: SITE});
+    const ownWorkspace = ghostToken({key: 'DUMMY_TOKEN', workspace: 'blog_one'});
+    assert.deepEqual(await on(`Bearer ${ownWorkspace}`, undefined, 'api_kpis'), {ok: true, siteUuid: SITE});
     const off = createPipeTokenVerifier({config: {...base, masterKey: MASTER}, now: () => NOW});
     assert.equal((await off(`Bearer ${token}`, undefined, 'api_kpis')).ok, false);
+    assert.equal((await off(`Bearer ${ownWorkspace}`, undefined, 'api_kpis')).ok, false);
   });
 });
 

@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import {LEGACY_ADMIN_TOKEN, LEGACY_WORKSPACE_ID, type Config} from '../config.js';
+import {LEGACY_ADMIN_TOKEN, type Config} from '../config.js';
 import {DERIVED_WORKSPACE_PATTERN, deriveSiteKey} from './keys.js';
 import type {SiteLookup} from './site-lookup.js';
 
@@ -80,7 +80,9 @@ function candidateKeys(
   if (config.masterKey && DERIVED_WORKSPACE_PATTERN.test(workspaceId)) {
     keys.push({key: deriveSiteKey(config.masterKey, workspaceId), mode: 'derived'});
   }
-  if (config.allowLegacyToken && workspaceId === LEGACY_WORKSPACE_ID) {
+  // While the flag is on, a site that still signs with the placeholder may
+  // already name its own workspace (a host moving sites to derived keys).
+  if (config.allowLegacyToken) {
     keys.push({key: LEGACY_ADMIN_TOKEN, mode: 'legacy'});
   }
   return keys;

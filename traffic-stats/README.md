@@ -48,7 +48,7 @@ Set via environment variables (defaults shown):
 | `STATS_MASTER_KEY`          | _(unset)_                 | Several sites on one `traffic-stats`: each workspace's secret is derived from this (below). At least 32 characters. |
 | `STATS_SITE_LOOKUP_URL`     | _(unset)_                 | With `STATS_MASTER_KEY`: where to look up the one site a workspace may read (below). |
 | `STATS_SITE_LOOKUP_TOKEN`   | _(unset)_                 | Bearer token sent to that lookup.    |
-| `STATS_ALLOW_LEGACY_DUMMY_TOKEN` | `false`              | `true` also accepts tokens signed with `DUMMY_TOKEN` for `DUMMY_WORKSPACE_ID`, for moving sites off that value. |
+| `STATS_ALLOW_LEGACY_DUMMY_TOKEN` | `false`              | `true` also accepts tokens signed with `DUMMY_TOKEN`, whatever workspace they name, for moving sites off that value. |
 
 The service refuses to start without a signing secret (`TINYBIRD_ADMIN_TOKEN` or `STATS_MASTER_KEY`) and an ingest token, or with `DUMMY_TOKEN` as the secret unless `STATS_ALLOW_LEGACY_DUMMY_TOKEN=true`.
 
