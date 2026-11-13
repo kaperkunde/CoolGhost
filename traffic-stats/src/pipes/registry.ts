@@ -1,6 +1,6 @@
 import {getClickHouse} from '../lib/clickhouse.js';
 import type {GhostPipeName} from '../lib/jwt.js';
-import {buildHitsFilter, queryString, type PipeQueryParams} from './filters.js';
+import {buildHitsFilter, dateRange, queryString, type PipeQueryParams} from './filters.js';
 
 export type {PipeQueryParams} from './filters.js';
 
@@ -30,8 +30,7 @@ function dateRangeDays(dateFrom: string, dateTo: string): string[] {
 }
 
 const kpis: PipeHandler = async ({siteUuid, query}) => {
-  const dateFrom = queryString(query, 'date_from') ?? new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
-  const dateTo = queryString(query, 'date_to') ?? new Date().toISOString().slice(0, 10);
+  const {dateFrom, dateTo} = dateRange(query, 7);
   const memberStatus = queryString(query, 'member_status');
 
   let memberFilter = '';

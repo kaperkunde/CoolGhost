@@ -51,6 +51,8 @@ Only Caddy is meant to be reachable from outside; nothing else publishes a port.
    | `SERVICE_PASSWORD_MYSQL`      | Coolify       | That user's password.                                                       |
    | `SERVICE_PASSWORD_MYSQLROOT`  | Coolify       | MySQL root password.                                                        |
    | `SERVICE_PASSWORD_CLICKHOUSE` | Coolify       | Password of ClickHouse's `default` user, read by `clickhouse` and `traffic-stats`. |
+   | `SERVICE_PASSWORD_64_STATS`   | Coolify       | Secret Ghost signs its stats requests with (`tinybird__adminToken`), and `traffic-stats` checks them with (`TINYBIRD_ADMIN_TOKEN`). |
+   | `SERVICE_PASSWORD_64_INGEST`  | Coolify       | Token `traffic-analytics` sends with each page hit it forwards (`TINYBIRD_TRACKER_TOKEN`), and `traffic-stats` requires on `/v0/events` (`TRAFFIC_STATS_INGEST_TOKEN`). |
    | `MAIL_FROM`                   | you           | From address, e.g. `Ghost <noreply@blog.example.com>`.                      |
    | `MAIL_OPTIONS_HOST`           | you           | SMTP host, e.g. `smtp.eu.mailgun.org`.                                      |
    | `MAIL_OPTIONS_AUTH_USER`      | you           | SMTP user name.                                                             |
@@ -73,14 +75,13 @@ Only Caddy is meant to be reachable from outside; nothing else publishes a port.
 
 Ghost's analytics talk to Tinybird's API; here every piece of that API is on your own domain:
 
-- **Page hits.** Ghost's tracker script in the visitor's browser posts each hit to `tinybird__tracker__endpoint`, `<your URL>/.ghost/analytics/api/v1/page_hit`. Caddy sends it to `traffic-analytics`, which enriches it and forwards it (`PROXY_TARGET`) to `traffic-stats`' `/v0/events`, which writes it to ClickHouse.
-- **The dashboard.** Ghost Admin in your browser queries `tinybird__stats__endpointBrowser`, `<your URL>/.ghost/stats`, and the Ghost server queries `tinybird__stats__endpoint`, the same URL, for Top content. Caddy sends both to `traffic-stats`, which runs the matching ClickHouse query.
-- **No Tinybird account.** Ghost signs its stats requests with `tinybird__adminToken`, and `traffic-stats` checks them with the same fixed value (`DUMMY_TOKEN`, `DUMMY_WORKSPACE_ID`). There is nothing to sign up for.
+- **Page hits.** Ghost's tracker script in the visitor's browser posts each hit to `tinybird__tracker__endpoint`, `<your URL>/.ghost/analytics/api/v1/page_hit`. Caddy sends it to `traffic-analytics`, which enriches it and forwards it (`PROXY_TARGET`) to `traffic-stats`' `/v0/events` with `SERVICE_PASSWORD_64_INGEST` as a Bearer token, and `traffic-stats` writes it to ClickHouse. `/v0/events` is only reachable inside the network.
+- **The dashboard.** Ghost Admin in your browser queries `tinybird__stats__endpointBrowser`, `<your URL>/.ghost/stats`, and the Ghost server queries `tinybird__stats__endpoint`, the same URL, for Top content. Caddy sends the pipe queries (`/.ghost/stats/v0/pipes/*`, nothing else) to `traffic-stats`, which runs the matching ClickHouse query.
+- **No Tinybird account.** Ghost signs its stats requests with `tinybird__adminToken` (`SERVICE_PASSWORD_64_STATS`), and `traffic-stats` checks them with the same secret (`TINYBIRD_ADMIN_TOKEN`) and serves only the site the token names. There is nothing to sign up for. Coolify generates both secrets; `traffic-stats` will not start without them.
 
-All of this is set in `docker-compose.yaml` from `SERVICE_URL_CADDY`; there is nothing to configure. Two things follow from it:
+All of this is set in `docker-compose.yaml` from `SERVICE_URL_CADDY` and the two secrets; there is nothing to configure. One thing follows from it:
 
 - The Ghost server reaches its own stats through the **public URL**: Ghost refuses requests to private addresses in production, so it cannot be pointed at `traffic-stats` inside the network. The server must be able to reach its own domain, which on Coolify it normally can. If Top content stays empty while visitors are counted, check that first (see [Troubleshooting](#troubleshooting)).
-- Because the signing token is the fixed value above, the stats endpoint does not keep your **aggregate** analytics (visitor counts, top pages, sources, countries) private from someone who knows how to ask for them. It holds no content, member data or credentials.
 
 The ClickHouse schema (an events table and a materialized view) is created on the first start from [`clickhouse/init/01_schema.sql`](clickhouse/init/01_schema.sql). ClickHouse's own `system.*_log` tables, which stock ClickHouse keeps for ever and which reach gigabytes long before a small site's page hits do, are switched off, and a volume created before that has them dropped on its next start ([`clickhouse/config.d/system-logs.xml`](clickhouse/config.d/system-logs.xml)). Analytics are kept without a time limit.
 
@@ -104,6 +105,8 @@ Open **http://localhost:3000** for the site and **http://localhost:3000/ghost** 
 **Ghost.** The image is pinned to a version and digest in `docker-compose.yaml`. To move to another release, set `GHOST_VERSION` to a tag from [Docker Hub](https://hub.docker.com/_/ghost/tags), e.g. `6.73.0-alpine` (append `@sha256:…` to pin the digest too), and redeploy. Ghost migrates its database on start, and a migrated database cannot go back to the older version, so take a [backup](#backups) first, and read the [changelog](https://ghost.org/changelog/) before a major version. Unset `GHOST_VERSION` to go back to the version this repository pins.
 
 **The rest of the stack.** `MYSQL_VERSION` and `TRAFFIC_ANALYTICS_VERSION` work the same way. Caddy, ClickHouse and Node for `traffic-stats` are pinned in their Dockerfiles, so they move with this repository: redeploy after pulling (on Coolify, redeploy the resource) and the images are rebuilt.
+
+**New variables.** On Coolify, a variable this repository adds (such as `SERVICE_PASSWORD_64_STATS` and `SERVICE_PASSWORD_64_INGEST`) is generated on the next deploy. With plain Docker Compose, add it to `.env` from `.env.example`.
 
 ## Backups
 
@@ -145,8 +148,8 @@ For ClickHouse, copy its volume the same way with the `clickhouse` service stopp
 - **Ghost never gets healthy and logs `ER_ACCESS_DENIED_ERROR`.** The MySQL credentials changed after the volume was created; MySQL keeps the ones it was first started with. Put the old values back, or change the user's password inside MySQL.
 - **Staff invites, password resets or sign-in links never arrive.** Mail is not set, or the SMTP settings are wrong: Ghost logs the SMTP error when it tries to send. Port `465` needs `MAIL_OPTIONS_SECURE=true`, port `587` needs `false`.
 - **Too many redirects.** Ghost's `url` is `https://` but it is told the request came over plain HTTP. Coolify's proxy sends `X-Forwarded-Proto`, and Caddy passes it on from private addresses (`trusted_proxies` in the [`Caddyfile`](caddy/Caddyfile)); a proxy in front of Coolify must send it too.
-- **No visitors at all in analytics.** Check that `traffic-analytics`, `traffic-stats` and `clickhouse` are healthy, and that `<your URL>/.ghost/stats/v0/health` answers `{"status":"ok"}` (a `503` means `traffic-stats` cannot reach ClickHouse). Visits from a browser with an ad or tracker blocker are not counted.
-- **Visitors are counted but Top content is empty.** The Ghost server cannot reach its own public URL (see [How the analytics are wired](#how-the-analytics-are-wired)). From the `ghost` container, `wget -qO- <your URL>/.ghost/stats/v0/health` should answer `{"status":"ok"}`.
+- **No visitors at all in analytics.** Check that `traffic-analytics`, `traffic-stats` and `clickhouse` are healthy, and that `traffic-stats`' log does not say it will not start (it needs `SERVICE_PASSWORD_64_STATS` and `SERVICE_PASSWORD_64_INGEST`). Visits from a browser with an ad or tracker blocker are not counted.
+- **Visitors are counted but Top content is empty.** The Ghost server cannot reach its own public URL (see [How the analytics are wired](#how-the-analytics-are-wired)). From the `ghost` container, `wget -S -O- <your URL>/.ghost/stats/v0/pipes/api_kpis.json` should get `403` with `{"error":"Missing Bearer token"}` from `traffic-stats`; anything else means the request does not get there.
 - **`clickhouse` exits, or the host runs out of memory.** ClickHouse is limited to a small footprint, but the whole stack still wants about 2 GB. Its file log (warnings and errors) is in the container at `/var/log/clickhouse-server/`.
 - **Analytics tables are missing.** The schema is created only when ClickHouse's volume is empty. If that first start failed partway, remove the `ghost-clickhouse-data` volume (losing any analytics in it) and start again.
 - **`traffic-analytics` fails with `exec format error`.** The server is not amd64 (see [Prerequisites](#prerequisites)).
